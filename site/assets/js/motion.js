@@ -27,8 +27,12 @@
   const stage = $(".stage");
   const win = $(".window");
   const placeStage = () => {
-    const below = copy.offsetTop + copy.offsetHeight + 56;
-    stage.style.setProperty("--stage-top", Math.min(below, innerHeight * 0.8) + "px");
+    // Its visible top edge should sit just below the copy and always peek into
+    // the first screen. Tilted back (rotateX 30, scale .84) that edge appears
+    // about 14% of the window's height lower than the box itself.
+    const tilt = win.offsetHeight * 0.14;
+    const edge = Math.min(copy.offsetTop + copy.offsetHeight + 36, innerHeight * 0.84);
+    stage.style.setProperty("--stage-top", edge - tilt + "px");
   };
   placeStage();
   ScrollTrigger.addEventListener("refreshInit", placeStage);
@@ -76,7 +80,6 @@
 
   /* ---------- 3. Feature tour: one window, five chapters ---------- */
   const txts = $$(".ch-txt");
-  const imgs = $$(".ch-img");
   const bars = $$(".tour-progress b");
   const n = txts.length;
 
@@ -89,41 +92,86 @@
     scrollTrigger: { trigger: ".tour", start: "top bottom", end: "top top", scrub: true },
   });
 
-  // The wipe moves the incoming frame in while its picture moves the other
-  // way, and the outgoing picture is pushed back under a darkening shade:
-  // transforms and opacity only, so it all stays on the GPU. Letting go of the
-  // scroll settles on the nearest whole chapter.
+  // Scrolling only chooses the chapter; the change itself is a fixed-length
+  // animation that always plays out in full. While one runs, no other starts;
+  // when it ends we go to wherever the reader is by then, in one move. The
+  // wipe slides the incoming frame in while its picture slides the other way,
+  // and pushes the outgoing picture back under a shade: transforms and opacity
+  // only, so it stays on the GPU.
   const masks = $$(".ch-img");
   const pics = masks.map((m) => $("img", m));
   const shades = masks.map((m) => $(".shade", m));
+  const DURATION = 0.9;
+  let current = 0;
+  let wanted = 0;
+  let busy = false;
+  let layer = 1;
+
   gsap.set(masks.slice(1), { xPercent: 100 });
   gsap.set(pics.slice(1), { xPercent: -100 });
-  const tour = gsap.timeline({
-    defaults: { ease: "power3.inOut" },
-    scrollTrigger: {
-      trigger: ".tour-pin",
-      start: "top top",
-      end: () => "+=" + n * 85 + "%",
-      scrub: 1,
-      pin: true,
-      anticipatePin: 1,
-      snap: { snapTo: "labels", duration: { min: 0.25, max: 0.7 }, delay: 0.08, ease: "power2.inOut" },
+  gsap.set(bars[0], { scaleX: 1 });
+
+  const show = (to) => {
+    const from = current;
+    const dir = to > from ? 1 : -1;
+    busy = true;
+    current = to;
+    gsap.set(masks[to], { xPercent: 100 * dir, zIndex: ++layer });
+    gsap.set(pics[to], { xPercent: -100 * dir, scale: 1.06 });
+    gsap.set(shades[to], { opacity: 0 });
+    gsap
+      .timeline({
+        defaults: { duration: DURATION, ease: "power3.inOut" },
+        onComplete: () => {
+          // Park the old chapter off to the side, ready for its next entrance.
+          gsap.set(masks[from], { xPercent: 100 });
+          gsap.set(pics[from], { xPercent: 0, scale: 1 });
+          gsap.set(shades[from], { opacity: 0 });
+          busy = false;
+          wanted = Math.round(pinned.progress * (n - 1));
+          if (wanted !== current) show(wanted);
+        },
+      })
+      .to(masks[to], { xPercent: 0 }, 0)
+      .to(pics[to], { xPercent: 0, scale: 1 }, 0)
+      .to(pics[from], { xPercent: -16 * dir, scale: 0.97 }, 0)
+      .to(shades[from], { opacity: 0.6 }, 0)
+      .to(txts[from], { y: -32 * dir, autoAlpha: 0, duration: 0.3, ease: "power2.in" }, 0)
+      .fromTo(txts[to], { y: 32 * dir, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.5, ease: "power2.out" }, DURATION * 0.4)
+      .to(bars, { scaleX: (j) => (j <= to ? 1 : 0), duration: 0.6, ease: "power2.out", stagger: 0.04 }, 0);
+  };
+
+  const pinned = ScrollTrigger.create({
+    trigger: ".tour-pin",
+    start: "top top",
+    end: () => "+=" + (n - 1) * 75 + "%",
+    pin: true,
+    anticipatePin: 1,
+    snap: { snapTo: 1 / (n - 1), duration: { min: 0.2, max: 0.5 }, delay: 0.1, ease: "power1.inOut" },
+    onUpdate: (self) => {
+      if (busy) {
+        // The gate: while a chapter is still coming in, the page can't run
+        // more than half a chapter past it, so a hard flick can't skip the
+        // tour. Before the first and after the last chapter it stays open.
+        const span = (self.end - self.start) / (n - 1);
+        const y = self.scroll();
+        const lo = current === 0 ? -Infinity : self.start + (current - 0.5) * span + 1;
+        const hi = current === n - 1 ? Infinity : self.start + (current + 0.5) * span - 1;
+        if (y > hi) self.scroll(hi);
+        else if (y < lo) self.scroll(lo);
+        return;
+      }
+      wanted = Math.round(self.progress * (n - 1));
+      if (wanted !== current) show(wanted);
     },
   });
-  tour.addLabel("ch0", 0).to(bars[0], { scaleX: 1, ease: "none", duration: 1 }, 0);
-  for (let i = 1; i < n; i++) {
-    tour
-      .fromTo(masks[i], { xPercent: 100 }, { xPercent: 0, duration: 0.7 }, i)
-      .fromTo(pics[i], { xPercent: -100, scale: 1.06 }, { xPercent: 0, scale: 1, duration: 0.7 }, i)
-      .to(pics[i - 1], { xPercent: -16, scale: 0.97, duration: 0.7 }, i)
-      .to(shades[i - 1], { opacity: 0.6, duration: 0.7 }, i)
-      .to(txts[i - 1], { y: -32, autoAlpha: 0, duration: 0.25, ease: "power2.in" }, i)
-      .fromTo(txts[i], { y: 32, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.35, ease: "power2.out" }, i + 0.35)
-      .to(bars[i], { scaleX: 1, ease: "none", duration: 1 }, i)
-      .addLabel("ch" + i, i + 0.7);
-  }
-  tour.addLabel("end", n);
-  tour.fromTo(".device", { rotateY: -6, rotateX: 4, transformPerspective: 1800 }, { rotateY: 6, rotateX: -1, ease: "none", duration: n }, 0);
+
+  // A gentle tilt that follows the scroll, so the section still feels alive.
+  gsap.fromTo(
+    ".device",
+    { rotateY: -6, rotateX: 4, transformPerspective: 1800 },
+    { rotateY: 6, rotateX: -1, ease: "none", scrollTrigger: { trigger: ".tour-pin", start: "top top", end: () => "+=" + (n - 1) * 75 + "%", scrub: 1 } },
+  );
 
   /* ---------- 4. Import: bookmarks sail into Kade and moor ---------- */
   const harbour = gsap
