@@ -154,6 +154,18 @@ export interface Progress {
   backup_id: string | null;
 }
 
+export type ImportSource = "cyberduck" | "filezilla" | "transmit";
+
+export interface ImportFound {
+  source: ImportSource;
+  path: string;
+}
+
+export interface ImportPreview {
+  candidates: { profile: ServerProfile; duplicate: boolean }[];
+  skipped: string[];
+}
+
 export interface SyncStatus {
   sync_dir: string | null;
   data_file: string;
@@ -280,6 +292,9 @@ export function remoteOps(sessionId: string): FileOps {
 export const api = {
   listServers: () => invoke<ServerProfile[]>("list_servers"),
   saveServer: (profile: ServerProfile) => invoke<ServerProfile>("save_server", { profile }),
+  importDetect: () => invoke<ImportFound[]>("import_detect"),
+  importPreview: (source: ImportSource, path: string) => invoke<ImportPreview>("import_preview", { source, path }),
+  importApply: (profiles: ServerProfile[], workspace: string) => invoke<number>("import_apply", { profiles, workspace }),
   deleteServer: (id: string) => invoke<void>("delete_server", { id }),
   backupsList: () => invoke<Transaction[]>("backups_list"),
   backupRestore: (id: string, sessionId: string | null) =>

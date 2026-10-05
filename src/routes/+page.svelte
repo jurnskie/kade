@@ -27,6 +27,7 @@
   import TunnelsView from "$lib/components/TunnelsView.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import BackupsDialog from "$lib/components/BackupsDialog.svelte";
+  import ImportDialog from "$lib/components/ImportDialog.svelte";
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
   import WorkspaceDialog from "$lib/components/WorkspaceDialog.svelte";
   import { colorOf, workspaceIdOf } from "$lib/workspaces";
@@ -70,6 +71,9 @@
   let toast = $state<string | null>(null);
   let settings = $state<Settings>({ show_hidden: false, backup_retention_days: 7, updated_at: 0 });
   let settingsOpen = $state(false);
+  let importOpen = $state(false);
+  /** A short success message, e.g. after an import. */
+  let notice = $state<string | null>(null);
   let backupsOpen = $state(false);
   let conflictAsk = $state<{ names: string[]; dest: string; resolve: (p: ConflictPolicy | null) => void } | null>(null);
   let undo = $state<{ tx: Transaction; sessionId: string | null } | null>(null);
@@ -424,6 +428,7 @@
     onmanage={(ws) => (wsDialog = { initial: ws, key: Date.now() })}
     bind:collapsed
     onsettings={() => (settingsOpen = true)}
+    onimport={() => (importOpen = true)}
     {recent}
     onsearch={() => (switcherOpen = true)}
     onbackups={() => (backupsOpen = true)}
@@ -670,7 +675,27 @@
 {/if}
 
 {#if settingsOpen}
-  <SettingsDialog {settings} onchange={() => reloadStore().catch(showError)} onclose={() => (settingsOpen = false)} />
+  <SettingsDialog
+    {settings}
+    onchange={() => reloadStore().catch(showError)}
+    onimport={() => ((settingsOpen = false), (importOpen = true))}
+    onclose={() => (settingsOpen = false)}
+  />
+{/if}
+
+{#if importOpen}
+  <ImportDialog
+    {workspaces}
+    defaultWorkspace={activeWorkspace}
+    onimported={async (ws, n) => {
+      importOpen = false;
+      await reloadStore().catch(showError);
+      switchWorkspace(ws);
+      notice = tn(n, "Imported {n} connection", "Imported {n} connections");
+      setTimeout(() => (notice = null), 5000);
+    }}
+    onclose={() => (importOpen = false)}
+  />
 {/if}
 
 {#if prompt}
@@ -719,7 +744,12 @@
   </div>
 {/if}
 
-{#if updateAvailable && !undo && !toast}
+{#if notice && !undo && !toast}
+  <div class="toast undo" role="status">
+    <span>{notice}</span>
+    <button aria-label={t("Close")} onclick={() => (notice = null)}><X size={14} /></button>
+  </div>
+{:else if updateAvailable && !undo && !toast}
   <div class="toast undo" role="status">
     <span>{t("Kade {v} is available", { v: updateAvailable })}</span>
     <button onclick={() => ((settingsOpen = true), (updateAvailable = null))}>{t("Update")}</button>

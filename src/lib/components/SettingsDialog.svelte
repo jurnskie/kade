@@ -1,13 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as pickFolder } from "@tauri-apps/plugin-dialog";
-  import { Settings as Gear, X, FolderSync, CloudCheck, GitMerge } from "@lucide/svelte";
+  import { Settings as Gear, X, FolderSync, CloudCheck, GitMerge, Import } from "@lucide/svelte";
   import { listen } from "@tauri-apps/api/event";
   import { i18n, t, tn, type LangChoice } from "$lib/i18n.svelte";
   import { theme, type ThemeChoice } from "$lib/theme.svelte";
   import { api, errorMessage, type EditorChoice, type McpStatus, type Settings, type SyncStatus, type UpdateInfo } from "$lib/api";
 
-  let { settings, onchange, onclose }: { settings: Settings; onchange: () => void; onclose: () => void } = $props();
+  let {
+    settings,
+    onchange,
+    onimport,
+    onclose,
+  }: { settings: Settings; onchange: () => void; onimport: () => void; onclose: () => void } = $props();
 
   let status = $state<SyncStatus | null>(null);
   let busy = $state(false);
@@ -205,6 +210,14 @@
       {#if status?.sync_dir}
         <button class="btn" disabled={busy} onclick={() => setDir(null)}>{t("Stop (keep a local copy)")}</button>
       {/if}
+    </div>
+  </section>
+
+  <section>
+    <div class="lbl">{t("Import")}</div>
+    <p class="intro small">{t("Bring your bookmarks over from Cyberduck, FileZilla or Transmit. Passwords stay behind.")}</p>
+    <div class="actions">
+      <button class="btn" onclick={onimport}><Import size={14} />{t("Import connections…")}</button>
     </div>
   </section>
 

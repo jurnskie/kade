@@ -8,6 +8,7 @@ mod editors;
 mod error;
 mod fs;
 mod ftp;
+mod importer;
 mod mcp;
 mod onepassword;
 mod profiles;
@@ -56,6 +57,21 @@ fn list_servers() -> AppResult<Vec<ServerProfile>> {
 #[tauri::command]
 fn save_server(profile: ServerProfile) -> AppResult<ServerProfile> {
     profiles::upsert(profile)
+}
+
+#[tauri::command]
+fn import_detect() -> Vec<importer::Found> {
+    importer::detect()
+}
+
+#[tauri::command]
+fn import_preview(source: importer::Source, path: String) -> AppResult<importer::Preview> {
+    importer::preview(source, &path)
+}
+
+#[tauri::command]
+fn import_apply(profiles: Vec<ServerProfile>, workspace: String) -> AppResult<usize> {
+    importer::apply(profiles, &workspace)
 }
 
 #[tauri::command]
@@ -563,6 +579,9 @@ pub fn run() {
             list_servers,
             save_server,
             delete_server,
+            import_detect,
+            import_preview,
+            import_apply,
             list_workspaces,
             save_workspace,
             delete_workspace,

@@ -31,6 +31,7 @@
     onsearch,
     collapsed = $bindable(false),
     onsettings,
+    onimport,
     onbackups,
     workspaces,
     activeWorkspace,
@@ -50,6 +51,8 @@
     onsearch: () => void;
     collapsed?: boolean;
     onsettings: () => void;
+    /** Open the import dialog (Cyberduck, FileZilla, Transmit). */
+    onimport: () => void;
     onbackups: () => void;
     workspaces: Workspace[];
     activeWorkspace: Workspace | null;
@@ -214,6 +217,7 @@
       {/if}
     {:else}
       <p class="empty">{t("No connections yet. Add your first one.")}</p>
+      <button class="empty link" onclick={onimport}>{t("Import from Cyberduck, FileZilla or Transmit…")}</button>
     {/each}
   </div>
 
@@ -545,6 +549,14 @@
     color: var(--lichen);
     padding: 8px;
     font-size: 12.5px;
+  }
+  .empty.link {
+    padding-top: 0;
+    text-align: left;
+    color: var(--pine);
+  }
+  .empty.link:hover {
+    text-decoration: underline;
   }
   .foot {
     display: flex;
