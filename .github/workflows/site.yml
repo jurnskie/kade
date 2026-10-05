@@ -1,0 +1,17 @@
+# Deploy the landing page in site/ to kade.dev.jurnspijksma.nl (Ploi).
+name: Site
+
+on:
+  push:
+    branches: [master]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the Ploi deployment
+        env:
+          WEBHOOK: ${{ secrets.PLOI_DEPLOY_WEBHOOK }}
+        run: curl -fsS -X POST "$WEBHOOK"
