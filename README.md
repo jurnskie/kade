@@ -2,6 +2,8 @@
 
 A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Transmit.
 
+![Kade with a local folder and a website on the server side by side](docs/screenshots/main.png)
+
 - **Workspaces** (say, Home and Work) with groups of connections, each with its own colour and default
   1Password account. Every computer remembers its own active workspace (Ctrl 1–9).
 - **SFTP, SSH, FTP and FTPS** (explicit on port 21, implicit on 990).
@@ -19,6 +21,17 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
   test and open connections. Off by default; listens on 127.0.0.1 only and requires a token.
 - **Updates** from inside the app (Settings → About Kade).
 - **English and Dutch**, chosen automatically or in Settings → Language.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/switcher.png" alt="Quick open: find any connection with Ctrl K"></td>
+    <td><img src="docs/screenshots/backups.png" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Quick open (Ctrl K) across workspaces</sub></td>
+    <td align="center"><sub>Every delete and overwrite can be restored</sub></td>
+  </tr>
+</table>
 
 ## Install
 

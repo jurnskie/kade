@@ -27,7 +27,7 @@
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
   import WorkspaceDialog from "$lib/components/WorkspaceDialog.svelte";
   import { colorOf, workspaceIdOf } from "$lib/workspaces";
-  import { i18n, syncBackendLanguage, t } from "$lib/i18n.svelte";
+  import { i18n, syncBackendLanguage, t, tn } from "$lib/i18n.svelte";
   import TransferQueue from "$lib/components/TransferQueue.svelte";
   import EditsBar from "$lib/components/EditsBar.svelte";
   import { edits } from "$lib/edits.svelte";
@@ -470,7 +470,7 @@
         </div>
         <div class="right">
           <button class="btn" title={t("Disconnect")} onclick={() => closeTab(active)}>
-            <Unplug size={16} color="var(--ink2)" /><span class="txt">Verbreken</span>
+            <Unplug size={16} color="var(--ink2)" /><span class="txt">{t("Disconnect")}</span>
           </button>
         </div>
       </div>
@@ -669,7 +669,7 @@
 
 {#if drag.source}
   <div class="drag-ghost" style:left="{drag.x + 14}px" style:top="{drag.y + 10}px">
-    {drag.source.paths.length === 1 ? drag.source.paths[0].split("/").pop() : `${drag.source.paths.length} items`}
+    {drag.source.paths.length === 1 ? drag.source.paths[0].split("/").pop() : tn(drag.source.paths.length, "{n} item", "{n} items")}
     {#if drag.over && drag.over.side !== drag.source.side}
       <span>→ {drag.over.side === "remote" ? t("upload") : t("download")}</span>
     {/if}
