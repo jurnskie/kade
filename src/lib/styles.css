@@ -1,0 +1,123 @@
+/* Kade — "alpine hut" palette from the Doop design. One accent: pine. */
+:root {
+  --snow: #f6f7f4;
+  --paper: #ffffff;
+  --rail: #eef1ec;
+  --granite: #1e2321;
+  --ink2: #4a524e;
+  --lichen: #7c8780;
+  --mist: #e4e8e3;
+  --mist2: #eef1ed;
+  --pine: #1d6b57;
+  --pine-t: #e3efea;
+  --amber: #b7791f;
+  --amber-t: #f6eedf;
+  --danger: #b4412f;
+  --danger-t: #f7e6e2;
+  --op-blue: #0572ec;
+
+  --sans: "Instrument Sans", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+
+  color-scheme: light;
+}
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--snow);
+  color: var(--granite);
+  font: 13px/1.4 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-weight: 500;
+  border: 1px solid var(--mist);
+  background: var(--paper);
+  color: var(--granite);
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--mist2);
+}
+.btn.pri {
+  background: var(--pine);
+  color: #fff;
+  border-color: var(--pine);
+}
+.btn.pri:hover {
+  background: #185a49;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink2);
+}
+.btn.ghost:hover {
+  background: var(--mist2);
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lichen);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}

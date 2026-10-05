@@ -1,0 +1,761 @@
+<script lang="ts">
+  import type { Component } from "svelte";
+  import {
+    ArrowLeft,
+    ArrowUp,
+    RefreshCw,
+    Eye,
+    EyeOff,
+    Folder,
+    FolderSymlink,
+    File,
+    FileCode,
+    FileBraces,
+    FileLock,
+    FileTerminal,
+    FileText,
+    LoaderCircle,
+    TriangleAlert,
+    FilePlus,
+    FolderPlus,
+    FolderOpen,
+    PencilLine,
+    Trash2,
+    Copy,
+    ArrowUpFromLine,
+    ArrowDownToLine,
+    FilePen,
+  } from "@lucide/svelte";
+  import { tick } from "svelte";
+  import { errorMessage, joinPath, type Entry, type FileOps, type Side, type Transaction } from "$lib/api";
+  import { drag } from "$lib/drag.svelte";
+  import { locale, t, tn } from "$lib/i18n.svelte";
+  import { formatDate, formatSize, parentPath } from "$lib/format";
+
+  let {
+    label,
+    icon: Icon,
+    accent = false,
+    path = $bindable(),
+    home = "",
+    load,
+    ops,
+    showPermissions = false,
+    footerNote = "",
+    showHiddenDefault = false,
+    side,
+    sessionId,
+    refreshKey = 0,
+    sendLabel = "",
+    onsend,
+    ondeleted,
+    onopenfile,
+  }: {
+    label: string;
+    icon: Component<{ size?: number; color?: string }>;
+    accent?: boolean;
+    path: string;
+    home?: string;
+    load: (path: string) => Promise<Entry[]>;
+    ops: FileOps;
+    showPermissions?: boolean;
+    footerNote?: string;
+    showHiddenDefault?: boolean;
+    side: Side;
+    /** The tab this pane belongs to; drags only transfer within one tab. */
+    sessionId: string;
+    /** Bump to reload, e.g. after a transfer into this folder finished. */
+    refreshKey?: number;
+    /** "Upload to …" / "Download to local"; empty hides the action. */
+    sendLabel?: string;
+    onsend?: (paths: string[]) => void;
+    ondeleted?: (tx: Transaction) => void;
+    /** Open a file in the user's editor (remote files are synced back on save). */
+    onopenfile?: (entry: Entry) => void;
+  } = $props();
+
+  let entries = $state<Entry[]>([]);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  // svelte-ignore state_referenced_locally
+  let showHidden = $state(showHiddenDefault);
+  $effect(() => {
+    showHidden = showHiddenDefault;
+  });
+  let selected = $state(new Set<string>());
+  let anchor = $state<number | null>(null);
+  let history: string[] = [];
+  let reloadTick = $state(0);
+
+  const visible = $derived(
+    entries
+      .filter((e) => showHidden || !e.name.startsWith("."))
+      .toSorted((a, b) => Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name, locale())),
+  );
+
+  const hiddenCount = $derived(showHidden ? 0 : entries.length - visible.length);
+
+  // Breadcrumb segments; paths under home start with "~".
+  const crumbs = $derived.by(() => {
+    const inHome = home && (path === home || path.startsWith(home + "/"));
+    const base = inHome ? home : "";
+    const rest = (inHome ? path.slice(home.length) : path).split("/").filter(Boolean);
+    const out = [{ name: inHome ? "~" : "/", path: inHome ? home : "/" }];
+    let acc = base;
+    for (const part of rest) {
+      acc = `${acc}/${part}`;
+      out.push({ name: part, path: acc });
+    }
+    return out;
+  });
+
+  $effect(() => {
+    const p = path;
+    void reloadTick;
+    void refreshKey;
+    let cancelled = false;
+    loading = true;
+    error = null;
+    load(p)
+      .then((list) => {
+        if (cancelled) return;
+        entries = list;
+        selected = new Set(pendingSelect && list.some((e) => e.path === pendingSelect) ? [pendingSelect] : []);
+        pendingSelect = null;
+        anchor = null;
+      })
+      .catch((e) => !cancelled && (error = errorMessage(e)))
+      .finally(() => !cancelled && (loading = false));
+    return () => (cancelled = true);
+  });
+
+  function go(next: string) {
+    if (next === path) return;
+    history.push(path);
+    path = next;
+  }
+
+  function back() {
+    const prev = history.pop();
+    if (prev) path = prev;
+  }
+
+  function click(e: MouseEvent, entry: Entry, index: number) {
+    const next = new Set(selected);
+    if (e.shiftKey && anchor != null) {
+      const [a, b] = [Math.min(anchor, index), Math.max(anchor, index)];
+      for (const item of visible.slice(a, b + 1)) next.add(item.path);
+    } else if (e.ctrlKey || e.metaKey) {
+      next.has(entry.path) ? next.delete(entry.path) : next.add(entry.path);
+      anchor = index;
+    } else {
+      next.clear();
+      next.add(entry.path);
+      anchor = index;
+    }
+    selected = next;
+  }
+
+  function open(entry: Entry) {
+    if (entry.is_dir) go(entry.path);
+    else onopenfile?.(entry);
+  }
+
+  // ---- Context menu & file operations -----------------------------------
+
+  type Dialog =
+    | { kind: "new-file" | "new-folder"; value: string; error?: string }
+    | { kind: "rename"; entry: Entry; value: string; error?: string }
+    | { kind: "delete"; paths: string[]; error?: string };
+
+  let menu = $state<{ x: number; y: number; entry: Entry | null } | null>(null);
+  let dialog = $state<Dialog | null>(null);
+  let busy = $state(false);
+  let pendingSelect: string | null = null;
+  let nameInput = $state<HTMLInputElement>();
+
+  function openMenu(e: MouseEvent, entry: Entry | null, index = -1) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (entry && !selected.has(entry.path)) {
+      selected = new Set([entry.path]);
+      anchor = index;
+    }
+    if (!entry) selected = new Set();
+    // Keep the menu inside the window.
+    menu = { x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 260), entry };
+  }
+
+  async function ask(d: Dialog) {
+    menu = null;
+    dialog = d;
+    await tick();
+    if (nameInput && d.kind !== "delete") {
+      nameInput.focus();
+      // Select the name without its extension, like a file manager.
+      const dot = d.value.lastIndexOf(".");
+      nameInput.setSelectionRange(0, d.kind === "rename" && dot > 0 ? dot : d.value.length);
+    }
+  }
+
+  function validName(name: string): string | null {
+    if (!name.trim()) return t("The name can't be empty");
+    if (name.includes("/")) return t("The name can't contain /");
+    if (name === "." || name === "..") return t("Invalid name");
+    return null;
+  }
+
+  async function confirmDialog() {
+    if (!dialog || busy) return;
+    const d = dialog;
+    busy = true;
+    try {
+      if (d.kind === "delete") {
+        const tx = await ops.remove(d.paths);
+        if (tx) ondeleted?.(tx);
+      } else {
+        const name = d.value.trim();
+        const invalid = validName(name);
+        if (invalid) {
+          dialog = { ...d, error: invalid };
+          return;
+        }
+        const target = joinPath(path, name);
+        if (d.kind === "new-file") await ops.createFile(target);
+        else if (d.kind === "new-folder") await ops.mkdir(target);
+        else if (d.kind === "rename" && name !== d.entry.name) await ops.rename(d.entry.path, target);
+        pendingSelect = target;
+      }
+      dialog = null;
+      reloadTick++;
+    } catch (e) {
+      dialog = { ...d, error: errorMessage(e) };
+    } finally {
+      busy = false;
+    }
+  }
+
+  function askDelete(paths: string[]) {
+    if (paths.length) ask({ kind: "delete", paths });
+  }
+
+  async function copyPaths(paths: string[]) {
+    menu = null;
+    await navigator.clipboard.writeText(paths.join("\n"));
+  }
+
+  function onPaneKey(e: KeyboardEvent) {
+    if (dialog || (e.target as HTMLElement).closest("input")) return;
+    const sel = visible.filter((v) => selected.has(v.path));
+    if (e.key === "Delete" && sel.length) askDelete(sel.map((v) => v.path));
+    else if (e.key === "F2" && sel.length === 1) ask({ kind: "rename", entry: sel[0], value: sel[0].name });
+    else if (e.key === "Enter" && sel.length === 1) open(sel[0]);
+    else if (e.key === "Backspace") go(parentPath(path));
+    else return;
+    e.preventDefault();
+  }
+
+  function startDrag(e: PointerEvent, entry: Entry, index: number) {
+    drag.arm(e, () => {
+      if (!selected.has(entry.path)) {
+        selected = new Set([entry.path]);
+        anchor = index;
+      }
+      return { side, sessionId, paths: visible.filter((v) => selected.has(v.path)).map((v) => v.path) };
+    });
+  }
+
+  const dropHere = $derived(
+    drag.source != null &&
+      drag.over?.side === side &&
+      drag.over.sessionId === sessionId &&
+      !(drag.source.side === side && drag.source.sessionId === sessionId),
+  );
+
+  function iconFor(entry: Entry) {
+    if (entry.is_dir) return entry.is_symlink ? FolderSymlink : Folder;
+    const name = entry.name.toLowerCase();
+    if (name.startsWith(".env") || /\.(pem|key|crt)$/.test(name)) return FileLock;
+    if (/\.(json|ya?ml|toml|lock)$/.test(name)) return FileBraces;
+    if (/\.(sh|bash|zsh|fish)$/.test(name) || name === "artisan" || entry.permissions?.[3] === "x")
+      return FileTerminal;
+    if (/\.(php|js|ts|svelte|vue|jsx|tsx|rs|go|py|rb|css|html|blade\.php)$/.test(name)) return FileCode;
+    if (/\.(md|txt|log)$/.test(name)) return FileText;
+    return File;
+  }
+</script>
+
+<svelte:window
+  onclick={() => (menu = null)}
+  onblur={() => (menu = null)}
+  onkeydown={(e) => e.key === "Escape" && ((menu = null), (dialog = null))}
+/>
+
+<!-- Focusable so Delete/F2/Enter work on the selection. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<section class="pane" aria-label={label} tabindex="0" onkeydown={onPaneKey}>
+  <header class="ph">
+    <div class="loc">
+      <Icon size={16} color={accent ? "var(--pine)" : "var(--ink2)"} />
+      <em class:accent>{label}</em>
+    </div>
+    <nav class="crumb mono">
+      {#each crumbs as c, i (c.path)}
+        {#if i > 0 && crumbs[i - 1].name !== "/"}<span class="sep">/</span>{/if}
+        <button class:last={i === crumbs.length - 1} onclick={() => go(c.path)}>{c.name}</button>
+      {/each}
+    </nav>
+    <div class="tools">
+      <button title={t("Back")} onclick={back}><ArrowLeft size={15} /></button>
+      <button title={t("Up one folder")} onclick={() => go(parentPath(path))}><ArrowUp size={15} /></button>
+      <button title={t("Refresh")} onclick={() => reloadTick++}><RefreshCw size={15} /></button>
+      <button title={showHidden ? t("Hide hidden files") : t("Show hidden files")} onclick={() => (showHidden = !showHidden)}>
+        {#if showHidden}<Eye size={15} />{:else}<EyeOff size={15} />{/if}
+      </button>
+    </div>
+  </header>
+
+  <div
+    class="scroll"
+    class:drop={dropHere && drag.over?.dir === path}
+    role="presentation"
+    data-drop-side={side}
+    data-drop-session={sessionId}
+    data-drop-path={path}
+    oncontextmenu={(e) => openMenu(e, null)}
+  >
+    <table>
+      <thead>
+        <tr>
+          <th>{t("Name")}</th>
+          <th class="r">{t("Size")}</th>
+          <th class="c-mod">{t("Modified")}</th>
+          {#if showPermissions}<th class="c-perm">{t("Permissions")}</th>{/if}
+        </tr>
+      </thead>
+      <tbody>
+        {#each visible as entry, i (entry.path)}
+          {@const EntryIcon = iconFor(entry)}
+          <tr
+            class:sel={selected.has(entry.path)}
+            class:drop={dropHere && entry.is_dir && drag.over?.dir === entry.path}
+            data-drop-dir={entry.is_dir ? entry.path : undefined}
+            onpointerdown={(e) => startDrag(e, entry, i)}
+            onclick={(e) => click(e, entry, i)}
+            ondblclick={() => open(entry)}
+            oncontextmenu={(e) => openMenu(e, entry, i)}
+          >
+            <td class="n">
+              <div>
+                <EntryIcon size={16} color={selected.has(entry.path) ? "var(--pine)" : "var(--lichen)"} />
+                <span>{entry.name}</span>
+              </div>
+            </td>
+            <td class="s mono">{entry.is_dir ? "—" : formatSize(entry.size)}</td>
+            <td class="m c-mod">{formatDate(entry.modified)}</td>
+            {#if showPermissions}<td class="p mono c-perm">{entry.permissions ?? ""}</td>{/if}
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+
+    {#if loading && entries.length === 0}
+      <div class="state"><LoaderCircle size={18} class="spin" color="var(--lichen)" /></div>
+    {:else if error}
+      <div class="state err"><TriangleAlert size={16} color="var(--danger)" />{error}</div>
+    {:else if visible.length === 0 && hiddenCount > 0}
+      <div class="state">
+        {t("Only hidden items ({n})", { n: hiddenCount })}
+        <button class="btn" onclick={() => (showHidden = true)}><Eye size={14} />{t("Show")}</button>
+      </div>
+    {:else if visible.length === 0}
+      <div class="state">{t("This folder is empty")}</div>
+    {/if}
+  </div>
+
+  {#if menu}
+    {@const sel = visible.filter((v) => selected.has(v.path))}
+    <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+      {#if menu.entry}
+        {#if sendLabel && onsend}
+          <button role="menuitem" class="send" onclick={() => ((menu = null), onsend(sel.map((v) => v.path)))}>
+            {#if side === "local"}<ArrowUpFromLine size={15} />{:else}<ArrowDownToLine size={15} />{/if}
+            {sendLabel}{#if sel.length > 1}&nbsp;({sel.length}){/if}
+          </button>
+          <hr />
+        {/if}
+        {#if !menu.entry.is_dir && sel.length === 1 && onopenfile}
+          <button role="menuitem" onclick={() => ((menu = null), onopenfile(sel[0]))}>
+            <FilePen size={15} />{side === "remote" ? t("Edit in editor") : t("Open in editor")}
+          </button>
+        {/if}
+        {#if menu.entry.is_dir && sel.length === 1}
+          <button role="menuitem" onclick={() => ((menu = null), open(sel[0]))}><FolderOpen size={15} />{t("Open")}</button>
+        {/if}
+        {#if sel.length === 1}
+          <button role="menuitem" onclick={() => ask({ kind: "rename", entry: sel[0], value: sel[0].name })}>
+            <PencilLine size={15} />{t("Rename")}<kbd>F2</kbd>
+          </button>
+        {/if}
+        <button role="menuitem" onclick={() => copyPaths(sel.map((v) => v.path))}>
+          <Copy size={15} />{sel.length > 1 ? t("Copy {n} paths", { n: sel.length }) : t("Copy path")}
+        </button>
+        <button role="menuitem" class="danger" onclick={() => askDelete(sel.map((v) => v.path))}>
+          <Trash2 size={15} />{sel.length > 1 ? t("Delete {n} items", { n: sel.length }) : t("Delete")}<kbd>Del</kbd>
+        </button>
+        <hr />
+      {/if}
+      <button role="menuitem" onclick={() => ask({ kind: "new-file", value: t("new-file.txt") })}>
+        <FilePlus size={15} />{t("New file")}
+      </button>
+      <button role="menuitem" onclick={() => ask({ kind: "new-folder", value: t("new folder") })}>
+        <FolderPlus size={15} />{t("New folder")}
+      </button>
+      <hr />
+      <button role="menuitem" onclick={() => ((menu = null), reloadTick++)}><RefreshCw size={15} />{t("Refresh")}</button>
+      <button role="menuitem" onclick={() => ((menu = null), (showHidden = !showHidden))}>
+        {#if showHidden}<EyeOff size={15} />{t("Hide hidden")}{:else}<Eye size={15} />{t("Show hidden")}{/if}
+      </button>
+    </div>
+  {/if}
+
+  {#if dialog}
+    <div class="scrim" role="presentation" onclick={() => (dialog = null)}></div>
+    <div class="dlg" role="dialog" aria-modal="true">
+      {#if dialog.kind === "delete"}
+        <h3>{dialog.paths.length === 1 ? t("Delete?") : t("Delete {n} items?", { n: dialog.paths.length })}</h3>
+        <p>
+          {#if dialog.paths.length === 1}<span class="mono">{dialog.paths[0]}</span><br />{/if}
+          {#if side === "local"}
+            {dialog.paths.length === 1
+              ? t("This will be deleted, including folder contents. Kade keeps a backup, so you can restore it from Backups.")
+              : t("All selected items will be deleted, including folder contents. Kade keeps a backup, so you can restore them from Backups.")}
+          {:else}
+            {dialog.paths.length === 1
+              ? t("This will be deleted on {server}, including folder contents. Kade keeps a backup, so you can restore it from Backups.", { server: label })
+              : t("All selected items will be deleted on {server}, including folder contents. Kade keeps a backup, so you can restore them from Backups.", { server: label })}
+          {/if}
+        </p>
+      {:else}
+        <h3>{dialog.kind === "new-file" ? t("New file") : dialog.kind === "new-folder" ? t("New folder") : t("Rename")}</h3>
+        <input
+          class="mono"
+          bind:this={nameInput}
+          bind:value={dialog.value}
+          spellcheck="false"
+          onkeydown={(e) => e.key === "Enter" && confirmDialog()}
+        />
+        <p class="where mono">{t("in {path}", { path })}</p>
+      {/if}
+      {#if dialog.error}<p class="err">{dialog.error}</p>{/if}
+      <div class="da">
+        <button class="btn ghost" onclick={() => (dialog = null)}>{t("Cancel")}</button>
+        <button class="btn pri" class:del={dialog.kind === "delete"} disabled={busy} onclick={confirmDialog}>
+          {#if busy}<LoaderCircle size={14} class="spin" />{/if}
+          {dialog.kind === "delete" ? t("Delete") : dialog.kind === "rename" ? t("Rename") : t("Create")}
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  <footer class="pf">
+    <span>
+      {#if selected.size > 0}{t("{n} of {total} selected", { n: selected.size, total: visible.length })}{:else}{tn(visible.length, "{n} item", "{n} items")}{/if}{#if hiddenCount > 0} · {t("{n} hidden", { n: hiddenCount })}{/if}
+    </span>
+    <span class="mono">{footerNote}</span>
+  </footer>
+</section>
+
+<style>
+  .pane:focus {
+    outline: none;
+  }
+  .pane:focus-within {
+    border-color: #cfd7d1;
+  }
+  .menu {
+    position: fixed;
+    z-index: 40;
+    min-width: 210px;
+    background: var(--paper);
+    border: 1px solid var(--mist);
+    border-radius: 10px;
+    padding: 5px;
+    box-shadow: 0 12px 32px rgba(15, 21, 19, 0.16);
+    display: flex;
+    flex-direction: column;
+  }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 9px;
+    border-radius: 6px;
+    text-align: left;
+    color: var(--granite);
+  }
+  .menu button:hover {
+    background: var(--pine-t);
+  }
+  .menu button.send {
+    color: var(--pine);
+    font-weight: 500;
+  }
+  .scroll.drop,
+  tr.drop td {
+    background: var(--pine-t);
+  }
+  .scroll.drop {
+    box-shadow: inset 0 0 0 2px var(--pine);
+  }
+  .menu button.danger {
+    color: var(--danger);
+  }
+  .menu button.danger:hover {
+    background: var(--danger-t);
+  }
+  .menu kbd {
+    margin-left: auto;
+    font: 10.5px var(--mono);
+    color: var(--lichen);
+  }
+  .menu hr {
+    border: 0;
+    border-top: 1px solid var(--mist2);
+    margin: 4px 2px;
+  }
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(30, 35, 33, 0.25);
+    z-index: 41;
+  }
+  .dlg {
+    position: fixed;
+    left: 50%;
+    top: 30%;
+    transform: translateX(-50%);
+    width: min(420px, calc(100vw - 32px));
+    background: var(--paper);
+    border-radius: 14px;
+    padding: 18px 20px 16px;
+    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28);
+    z-index: 42;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    user-select: text;
+  }
+  .dlg h3 {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .dlg p {
+    color: var(--ink2);
+    line-height: 1.5;
+    word-break: break-all;
+  }
+  .dlg .where {
+    font-size: 11.5px;
+    color: var(--lichen);
+  }
+  .dlg .err {
+    color: var(--danger);
+    font-size: 12.5px;
+  }
+  .dlg input {
+    height: 36px;
+    border: 1px solid var(--pine);
+    box-shadow: 0 0 0 3px var(--pine-t);
+    border-radius: 8px;
+    padding: 0 11px;
+    outline: 0;
+    font-size: 12.5px;
+  }
+  .da {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .btn.del {
+    background: var(--danger);
+    border-color: var(--danger);
+  }
+  .pane {
+    container: pane / inline-size;
+    background: var(--paper);
+    border: 1px solid var(--mist);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
+  }
+  .ph {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px 10px 14px;
+    border-bottom: 1px solid var(--mist);
+  }
+  .loc {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+  .loc em {
+    font-style: normal;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--lichen);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .loc em.accent {
+    color: var(--pine);
+  }
+  .crumb {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 12px;
+    color: var(--lichen);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .crumb button {
+    padding: 2px 3px;
+    border-radius: 4px;
+  }
+  .crumb button:hover {
+    background: var(--mist2);
+    color: var(--granite);
+  }
+  .crumb button.last {
+    color: var(--granite);
+    font-weight: 500;
+  }
+  .sep {
+    opacity: 0.6;
+  }
+  .tools {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+    flex: none;
+    color: var(--ink2);
+  }
+  .tools button {
+    padding: 5px;
+    border-radius: 6px;
+    display: grid;
+  }
+  .tools button:hover {
+    background: var(--mist2);
+  }
+  .scroll {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    position: relative;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--paper);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--lichen);
+    text-align: left;
+    padding: 8px 14px 6px;
+    border-bottom: 1px solid var(--mist2);
+    z-index: 1;
+  }
+  th.r {
+    text-align: right;
+  }
+  td {
+    padding: 0 14px;
+    height: 33px;
+    border-bottom: 1px solid var(--mist2);
+    white-space: nowrap;
+  }
+  tr:hover td {
+    background: #fafbf9;
+  }
+  td.n {
+    width: 100%;
+    max-width: 0;
+  }
+  td.n div {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  td.n span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  td.m {
+    color: var(--lichen);
+    font-size: 12px;
+  }
+  td.s {
+    color: var(--ink2);
+    font-size: 12px;
+    text-align: right;
+  }
+  td.p {
+    font-size: 11.5px;
+    color: var(--lichen);
+  }
+  tr.sel td {
+    background: var(--pine-t);
+  }
+  tr.sel td:first-child {
+    box-shadow: inset 3px 0 0 var(--pine);
+    font-weight: 600;
+  }
+  .state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 40px 20px;
+    color: var(--lichen);
+    text-align: center;
+  }
+  .state.err {
+    color: var(--danger);
+  }
+  /* Drop secondary columns and the label as the pane narrows. */
+  @container pane (max-width: 560px) {
+    .c-perm {
+      display: none;
+    }
+  }
+  @container pane (max-width: 420px) {
+    .c-mod,
+    .loc em {
+      display: none;
+    }
+    .pf .mono {
+      display: none;
+    }
+  }
+  .pf {
+    padding: 8px 14px;
+    font-size: 11.5px;
+    color: var(--lichen);
+    border-top: 1px solid var(--mist2);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>

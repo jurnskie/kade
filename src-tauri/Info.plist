@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS 15+ asks before an app may reach devices on the local network
+       (e.g. a homelab server on 10.0.0.x); this text is shown in that prompt. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Kade connects to your servers, including those on your local network.</string>
+</dict>
+</plist>

@@ -1,0 +1,276 @@
+//! One file-system interface over SFTP and FTP, so listing, transfers,
+//! deleting and backups don't care which protocol a server speaks.
+
+use russh_sftp::client::fs::File as SftpFile;
+use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use crate::error::{AppError, AppResult};
+use crate::fs::{format_mode, Entry};
+use crate::ftp::{Ftp, FtpTransfer};
+use crate::ssh::join_remote;
+
+/// What the transfer and backup code needs to know about a remote item.
+#[derive(Debug, Clone)]
+pub struct Meta {
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    pub mtime: Option<i64>,
+}
+
+pub enum RemoteFs {
+    Sftp(SftpSession),
+    Ftp(Ftp),
+}
+
+pub enum RemoteReader {
+    Sftp(SftpFile),
+    Ftp(FtpTransfer),
+}
+
+pub enum RemoteWriter {
+    Sftp(SftpFile),
+    Ftp(FtpTransfer),
+}
+
+impl RemoteReader {
+    pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            RemoteReader::Sftp(f) => f.read(buf).await,
+            RemoteReader::Ftp(t) => t.read(buf).await,
+        }
+    }
+
+    pub async fn finish(self) -> AppResult<()> {
+        match self {
+            RemoteReader::Sftp(_) => Ok(()),
+            RemoteReader::Ftp(t) => t.finish().await,
+        }
+    }
+}
+
+impl RemoteWriter {
+    pub async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        match self {
+            RemoteWriter::Sftp(f) => f.write_all(buf).await,
+            RemoteWriter::Ftp(t) => t.write_all(buf).await,
+        }
+    }
+
+    pub async fn finish(self) -> AppResult<()> {
+        match self {
+            RemoteWriter::Sftp(mut f) => Ok(f.shutdown().await?),
+            RemoteWriter::Ftp(t) => t.finish().await,
+        }
+    }
+}
+
+fn meta_from_sftp(m: &FileAttributes) -> Meta {
+    Meta { is_dir: m.is_dir(), is_symlink: m.file_type().is_symlink(), size: m.size.unwrap_or(0), mtime: m.mtime.map(i64::from) }
+}
+
+impl RemoteFs {
+    /// Backups may be kept on the server only where moving files there is
+    /// cheap and private: SFTP into the user's home. FTP roots are often the
+    /// web root itself, so FTP backups always go to this computer instead.
+    pub fn keeps_backups_on_server(&self) -> bool {
+        matches!(self, RemoteFs::Sftp(_))
+    }
+
+    /// How far apart modification times may be and still count as equal.
+    pub fn mtime_tolerance(&self) -> i64 {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.mtime_tolerance(),
+            RemoteFs::Sftp(_) => 0,
+        }
+    }
+
+    pub async fn list(&self, dir: &str) -> AppResult<Vec<Entry>> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.list(dir).await,
+            RemoteFs::Sftp(sftp) => {
+                let mut out = Vec::new();
+                for item in sftp.read_dir(dir).await? {
+                    let name = item.file_name();
+                    if name == "." || name == ".." {
+                        continue;
+                    }
+                    let full = join_remote(dir, &name);
+                    let meta = item.metadata();
+                    let is_symlink = meta.file_type().is_symlink();
+                    // read_dir reports the link itself; follow it to know if it leads to a directory.
+                    let is_dir =
+                        if is_symlink { sftp.metadata(full.clone()).await.map(|m| m.is_dir()).unwrap_or(false) } else { meta.is_dir() };
+                    out.push(Entry {
+                        name,
+                        path: full,
+                        is_dir,
+                        is_symlink,
+                        size: meta.size.unwrap_or(0),
+                        modified: meta.mtime.map(i64::from),
+                        permissions: meta.permissions.map(format_mode),
+                    });
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Metadata following symlinks; `None` when the path does not exist.
+    pub async fn stat(&self, path: &str) -> AppResult<Option<Meta>> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.stat(path).await,
+            RemoteFs::Sftp(sftp) => {
+                if !sftp.try_exists(path).await? {
+                    return Ok(None);
+                }
+                Ok(Some(meta_from_sftp(&sftp.metadata(path).await?)))
+            }
+        }
+    }
+
+    /// Is this a real directory (not a symlink to one)? Used before deleting.
+    pub async fn is_real_dir(&self, path: &str) -> AppResult<bool> {
+        match self {
+            RemoteFs::Ftp(ftp) => Ok(ftp.stat(path).await?.is_some_and(|m| m.is_dir && !m.is_symlink)),
+            RemoteFs::Sftp(sftp) => Ok(sftp.symlink_metadata(path).await?.is_dir()),
+        }
+    }
+
+    pub async fn exists(&self, path: &str) -> AppResult<bool> {
+        Ok(self.stat(path).await?.is_some())
+    }
+
+    pub async fn mkdir(&self, path: &str) -> AppResult<()> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.mkdir(path).await,
+            RemoteFs::Sftp(sftp) => Ok(sftp.create_dir(path).await?),
+        }
+    }
+
+    pub async fn mkdir_p(&self, dir: &str) -> AppResult<()> {
+        let mut acc = String::new();
+        for part in dir.split('/').filter(|p| !p.is_empty()) {
+            acc = format!("{acc}/{part}");
+            if !self.exists(&acc).await? {
+                self.mkdir(&acc).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn remove_file(&self, path: &str) -> AppResult<()> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.remove_file(path).await,
+            RemoteFs::Sftp(sftp) => Ok(sftp.remove_file(path).await?),
+        }
+    }
+
+    pub async fn remove_dir(&self, path: &str) -> AppResult<()> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.remove_dir(path).await,
+            RemoteFs::Sftp(sftp) => Ok(sftp.remove_dir(path).await?),
+        }
+    }
+
+    pub async fn rename(&self, from: &str, to: &str) -> AppResult<()> {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.rename(from, to).await,
+            RemoteFs::Sftp(sftp) => Ok(sftp.rename(from, to).await?),
+        }
+    }
+
+    /// Create an empty file, failing if it already exists.
+    pub async fn create_new(&self, path: &str) -> AppResult<()> {
+        match self {
+            RemoteFs::Sftp(sftp) => {
+                sftp.open_with_flags(path, OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE).await?;
+                Ok(())
+            }
+            RemoteFs::Ftp(_) => {
+                // FTP has no exclusive create; check first.
+                if self.exists(path).await? {
+                    return Err(AppError::other(format!("{path} bestaat al")));
+                }
+                self.writer(path).await?.finish().await
+            }
+        }
+    }
+
+    /// Best effort: keep the source's modification time on the copy.
+    pub async fn set_mtime(&self, path: &str, unix_secs: i64) {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.set_mtime(path, unix_secs).await,
+            RemoteFs::Sftp(sftp) => {
+                let mut attrs = FileAttributes::empty();
+                attrs.mtime = Some(unix_secs as u32);
+                attrs.atime = Some(unix_secs as u32);
+                let _ = sftp.set_metadata(path, attrs).await;
+            }
+        }
+    }
+
+    pub async fn reader(&self, path: &str) -> AppResult<RemoteReader> {
+        match self {
+            RemoteFs::Ftp(ftp) => Ok(RemoteReader::Ftp(ftp.reader(path).await?)),
+            RemoteFs::Sftp(sftp) => Ok(RemoteReader::Sftp(sftp.open(path).await?)),
+        }
+    }
+
+    /// Open for writing, creating or truncating.
+    pub async fn writer(&self, path: &str) -> AppResult<RemoteWriter> {
+        match self {
+            RemoteFs::Ftp(ftp) => Ok(RemoteWriter::Ftp(ftp.writer(path).await?)),
+            RemoteFs::Sftp(sftp) => {
+                Ok(RemoteWriter::Sftp(sftp.open_with_flags(path, OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE).await?))
+            }
+        }
+    }
+
+    /// Delete a file, symlink or directory tree. Symlinks are removed, never followed.
+    pub async fn delete_tree(&self, path: &str) -> AppResult<()> {
+        crate::fs::guard(path)?;
+        if !self.is_real_dir(path).await? {
+            return self.remove_file(path).await;
+        }
+        // Post-order walk without recursion: a dir is removed after its contents.
+        let mut stack = vec![(path.to_string(), false)];
+        while let Some((dir, emptied)) = stack.pop() {
+            if emptied {
+                self.remove_dir(&dir).await?;
+                continue;
+            }
+            stack.push((dir.clone(), true));
+            for entry in self.list(&dir).await? {
+                if entry.is_dir && !entry.is_symlink {
+                    stack.push((entry.path, false));
+                } else {
+                    self.remove_file(&entry.path).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove empty directories from `dir` up to and including `stop`.
+    pub async fn rmdir_up(&self, dir: &str, stop: &str) {
+        let mut current = dir.to_string();
+        while current.starts_with(stop) {
+            if self.remove_dir(&current).await.is_err() || current == stop {
+                break;
+            }
+            current = crate::backup::parent(&current).to_string();
+        }
+    }
+
+    pub async fn close(&self) {
+        match self {
+            RemoteFs::Ftp(ftp) => ftp.quit().await,
+            RemoteFs::Sftp(sftp) => {
+                let _ = sftp.close().await;
+            }
+        }
+    }
+}
