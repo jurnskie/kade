@@ -58,7 +58,7 @@ pub struct Data {
     pub settings: Settings,
 }
 
-/// A top-level area such as "Thuis" or "Werk", above the groups.
+/// A top-level area such as "Home" or "Work", above the groups.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Workspace {
     pub id: String,
@@ -78,12 +78,12 @@ fn default_color() -> String {
 }
 
 /// Connections without a workspace belong here. A fixed id, so two machines
-/// creating it independently don't end up with two "Thuis" workspaces.
+/// creating it independently don't end up with two "Home" workspaces.
 pub const DEFAULT_WORKSPACE: &str = "default";
 
 impl Workspace {
     pub fn fallback() -> Self {
-        Workspace { id: DEFAULT_WORKSPACE.into(), name: "Thuis".into(), color: default_color(), op_account: None, updated_at: 0 }
+        Workspace { id: DEFAULT_WORKSPACE.into(), name: tr!("Home", "Thuis"), color: default_color(), op_account: None, updated_at: 0 }
     }
 }
 
@@ -214,7 +214,7 @@ fn write_atomic(path: &Path, contents: &str) -> AppResult<()> {
 
 fn read_data(path: &Path) -> AppResult<Data> {
     let raw = std::fs::read_to_string(path)?;
-    serde_json::from_str(&raw).map_err(|e| AppError::other(format!("{} is ongeldig: {e}", path.display())))
+    serde_json::from_str(&raw).map_err(|e| AppError::other(tr!("{} is invalid: {e}", "{} is ongeldig: {e}", path.display(), e = e)))
 }
 
 /// Conflict copies the common sync clients leave next to a file, e.g.
@@ -455,7 +455,7 @@ mod tests {
         let d = data(vec![server("1", "a", 1)], &[]);
         let ws = d.workspaces_or_default();
         assert_eq!((ws.len(), ws[0].id.as_str()), (1, DEFAULT_WORKSPACE));
-        assert_eq!(d.workspace_of(&d.servers[0]).unwrap().name, "Thuis");
+        assert_eq!(d.workspace_of(&d.servers[0]).unwrap().name, Workspace::fallback().name);
     }
 
     #[test]

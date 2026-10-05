@@ -2,12 +2,14 @@
 // Missing keys fall back to English. Keep {placeholders} identical.
 
 const nl: Record<string, string> = {
+  "Every Host in ~/.ssh/config becomes a connection, with its HostName, User, Port and key. Includes are followed; hosts behind a jump host are skipped for now.": "Elke Host in ~/.ssh/config wordt een server, met zijn HostName, User, Port en sleutel. Includes worden gevolgd; hosts achter een jump host worden voorlopig overgeslagen.",
+  "Starting…": "Starten…",
   "Import": "Importeren",
   "Import connections": "Servers importeren",
   "Import connections…": "Servers importeren…",
   "Import from {app}": "Importeren uit {app}",
-  "Import from Cyberduck, FileZilla or Transmit…": "Importeren uit Cyberduck, FileZilla of Transmit…",
-  "Bring your bookmarks over from Cyberduck, FileZilla or Transmit. Passwords stay behind.": "Neem je bladwijzers over uit Cyberduck, FileZilla of Transmit. Wachtwoorden blijven achter.",
+  "Import existing connections…": "Bestaande servers importeren…",
+  "Bring your connections over from ~/.ssh/config, Cyberduck, FileZilla or Transmit. Passwords stay behind.": "Neem je servers over uit ~/.ssh/config, Cyberduck, FileZilla of Transmit. Wachtwoorden blijven achter.",
   "Found on this computer": "Gevonden op deze computer",
   "Choose a {app} file": "Kies een {app}-bestand",
   "Choose file…": "Bestand kiezen…",

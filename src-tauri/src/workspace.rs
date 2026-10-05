@@ -82,14 +82,15 @@ mod tests {
 
         // Fresh store: only the implicit default.
         let ws = store::load().unwrap().workspaces_or_default();
-        assert_eq!((ws.len(), ws[0].name.as_str()), (1, "Thuis"));
+        let home = Workspace::fallback().name;
+        assert_eq!((ws.len(), ws[0].name.as_str()), (1, home.as_str()));
         assert!(delete(DEFAULT_WORKSPACE, "x").is_err(), "the last workspace must stay");
 
         let mut werk =
             Workspace { id: String::new(), name: "Werk".into(), color: "blue".into(), op_account: Some("ACC2".into()), updated_at: 0 };
         save(&mut werk).unwrap();
         let ws = store::load().unwrap().workspaces_or_default();
-        assert_eq!(ws.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["Thuis", "Werk"]);
+        assert_eq!(ws.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), [home.as_str(), "Werk"]);
 
         let mut dup = Workspace { id: String::new(), name: "werk".into(), color: "pine".into(), op_account: None, updated_at: 0 };
         assert!(save(&mut dup).is_err(), "names are unique");

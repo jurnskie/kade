@@ -22,6 +22,8 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
   (Syncthing, iCloud Drive, Synology Drive, …). Passwords are never written to it.
 - **MCP server** inside the app (Settings → AI assistants), so an assistant such as Claude Code can add, change,
   test and open connections. Off by default; listens on 127.0.0.1 only and requires a token.
+- **Import** connections from `~/.ssh/config`, Cyberduck, FileZilla and Transmit (Settings → Import). Passwords
+  are never imported.
 - **Updates** from inside the app (Settings → About Kade).
 - **Light and dark**, following the system or chosen in Settings → Appearance.
 - **English and Dutch**, chosen automatically or in Settings → Language.

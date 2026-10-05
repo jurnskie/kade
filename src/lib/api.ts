@@ -154,7 +154,7 @@ export interface Progress {
   backup_id: string | null;
 }
 
-export type ImportSource = "cyberduck" | "filezilla" | "transmit";
+export type ImportSource = "cyberduck" | "filezilla" | "transmit" | "ssh_config";
 
 export interface ImportFound {
   source: ImportSource;

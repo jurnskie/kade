@@ -217,7 +217,7 @@
       {/if}
     {:else}
       <p class="empty">{t("No connections yet. Add your first one.")}</p>
-      <button class="empty link" onclick={onimport}>{t("Import from Cyberduck, FileZilla or Transmit…")}</button>
+      <button class="empty link" onclick={onimport}>{t("Import existing connections…")}</button>
     {/each}
   </div>
 

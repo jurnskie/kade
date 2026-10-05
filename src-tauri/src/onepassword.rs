@@ -4,7 +4,6 @@
 //! (work and personal), `op` would otherwise pick its default account.
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
 

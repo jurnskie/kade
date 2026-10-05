@@ -82,7 +82,7 @@
 
   async function installUpdate() {
     if (!update?.latest) return;
-    installing = "Starten…";
+    installing = t("Starting…");
     try {
       await api.updateInstall(update.latest);
     } catch (e) {
@@ -215,7 +215,7 @@
 
   <section>
     <div class="lbl">{t("Import")}</div>
-    <p class="intro small">{t("Bring your bookmarks over from Cyberduck, FileZilla or Transmit. Passwords stay behind.")}</p>
+    <p class="intro small">{t("Bring your connections over from ~/.ssh/config, Cyberduck, FileZilla or Transmit. Passwords stay behind.")}</p>
     <div class="actions">
       <button class="btn" onclick={onimport}><Import size={14} />{t("Import connections…")}</button>
     </div>

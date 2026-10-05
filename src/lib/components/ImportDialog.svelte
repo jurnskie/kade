@@ -21,6 +21,7 @@
     { id: "cyberduck", label: "Cyberduck" },
     { id: "filezilla", label: "FileZilla" },
     { id: "transmit", label: "Transmit" },
+    { id: "ssh_config", label: "SSH config" },
   ];
 
   let source = $state<ImportSource>("cyberduck");
@@ -139,6 +140,8 @@
         {t("Cyberduck keeps a .duck file per bookmark in its Bookmarks folder. Pick that folder, or a single .duck file.")}
       {:else if source === "filezilla"}
         {t("Kade reads FileZilla's Site Manager (sitemanager.xml), or a file made with File → Export.")}
+      {:else if source === "ssh_config"}
+        {t("Every Host in ~/.ssh/config becomes a connection, with its HostName, User, Port and key. Includes are followed; hosts behind a jump host are skipped for now.")}
       {:else}
         {t("In Transmit, choose Servers → Export… and leave “Include passwords” off, so the file isn't encrypted. Then pick that file here.")}
       {/if}

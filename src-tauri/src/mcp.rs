@@ -60,7 +60,7 @@ pub struct NewConnection {
     /// Group shown in the sidebar, e.g. "Homelab", "Web servers", "Clients".
     #[serde(default)]
     pub group: Option<String>,
-    /// Workspace name or id from list_workspaces (e.g. "Thuis", "Werk"); omit for the default one.
+    /// Workspace name or id from list_workspaces (e.g. "Home", "Work"); omit for the default one.
     #[serde(default)]
     pub workspace: Option<String>,
     /// How to log in. Prefer one_password (SSH key in 1Password) for SSH and
@@ -250,7 +250,7 @@ impl KadeMcp {
         Self { app, tool_router: Self::tool_router() }
     }
 
-    #[tool(description = "List the workspaces (e.g. Thuis, Werk), each with its default 1Password account and number of connections.")]
+    #[tool(description = "List the workspaces (e.g. Home, Work), each with its default 1Password account and number of connections.")]
     async fn list_workspaces(&self) -> Result<CallToolResult, McpError> {
         let data = match store::load() {
             Ok(d) => d,
@@ -575,7 +575,7 @@ impl ServerHandler for KadeMcp {
             .with_server_info(Implementation::new("kade", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Kade is the user's SFTP/SSH/FTP manager. Connections live in groups inside workspaces \
-                 (e.g. Thuis, Werk); a 'site' is a connection whose remote_path is the site's folder. \
+                 (e.g. Home, Work); a 'site' is a connection whose remote_path is the site's folder. \
                  A workspace's op_account is used for 1Password unless the connection names its own. Never store plain passwords: use \
                  one_password (SSH key) or one_password_secret (1Password item reference), or \
                  'password' to have Kade ask at connect time. Check list_connections before adding \

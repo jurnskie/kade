@@ -1,4 +1,4 @@
-//! Import connections from Cyberduck, FileZilla and Transmit.
+//! Import connections from Cyberduck, FileZilla, Transmit and `~/.ssh/config`.
 //!
 //! Only what Kade can use comes over: protocol, host, port, user, name,
 //! folder/group, remote and local path, and a key file. Passwords never do;
@@ -20,6 +20,8 @@ pub enum Source {
     Cyberduck,
     Filezilla,
     Transmit,
+    #[serde(rename = "ssh_config")]
+    SshConfig,
 }
 
 /// Bookmarks of another app found at its usual place on this computer.
@@ -44,7 +46,7 @@ pub struct Preview {
 }
 
 /// A bookmark as read from the other app, before it becomes a profile.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone)]
 struct Entry {
     name: String,
     protocol: Option<Protocol>,
@@ -55,6 +57,8 @@ struct Entry {
     key_file: Option<String>,
     remote_path: Option<String>,
     local_path: Option<String>,
+    /// Sign-in decided by the source itself (OpenSSH config); else derived from `key_file`.
+    auth: Option<Auth>,
 }
 
 fn home() -> PathBuf {
@@ -72,13 +76,14 @@ fn candidates(source: Source) -> Vec<PathBuf> {
         Source::Filezilla => vec![h.join(".config/filezilla/sitemanager.xml"), h.join(".filezilla/sitemanager.xml")],
         // Transmit 5 keeps its servers in a private database; it has to export them.
         Source::Transmit => Vec::new(),
+        Source::SshConfig => vec![h.join(".ssh/config")],
     }
 }
 
 /// Bookmark files of the three apps in their default locations.
 pub fn detect() -> Vec<Found> {
     let mut out = Vec::new();
-    for source in [Source::Cyberduck, Source::Filezilla, Source::Transmit] {
+    for source in [Source::Cyberduck, Source::Filezilla, Source::Transmit, Source::SshConfig] {
         for path in candidates(source) {
             let usable = if path.is_dir() { !duck_files(&path).is_empty() } else { path.is_file() };
             if usable {
@@ -96,6 +101,7 @@ pub fn preview(source: Source, path: &str) -> AppResult<Preview> {
         Source::Cyberduck => parse_cyberduck(&path, &mut skipped)?,
         Source::Filezilla => parse_filezilla(&std::fs::read_to_string(&path)?, &mut skipped)?,
         Source::Transmit => parse_transmit(&std::fs::read(&path)?, &mut skipped)?,
+        Source::SshConfig => parse_ssh_config(&path, &mut skipped)?,
     };
 
     let mut seen: HashSet<String> = store::load()?.servers.iter().map(identity).collect();
@@ -141,8 +147,9 @@ fn to_profile(e: Entry) -> ServerProfile {
         Protocol::Sftp | Protocol::Ssh => 22,
         Protocol::Ftp | Protocol::Ftps => 21,
     });
-    let auth = match (&protocol, e.key_file) {
-        (Protocol::Sftp | Protocol::Ssh, Some(path)) => Auth::KeyFile { path },
+    let auth = match (&protocol, e.auth, e.key_file) {
+        (_, Some(auth), _) => auth,
+        (Protocol::Sftp | Protocol::Ssh, None, Some(path)) => Auth::KeyFile { path },
         _ => Auth::Password,
     };
     let name = if e.name.trim().is_empty() { e.host.clone() } else { e.name.trim().to_string() };
@@ -224,6 +231,7 @@ fn parse_cyberduck(path: &Path, skipped: &mut Vec<String>) -> AppResult<Vec<Entr
             local_path: nested("Local Folder Dictionary")
                 .map(str::to_string)
                 .or_else(|| dict.get("Local Folder").and_then(|v| v.as_string()).map(str::to_string)),
+            auth: None,
         };
         keep(entry, &protocol_name, skipped, &mut out);
     }
@@ -287,6 +295,7 @@ fn walk_filezilla(node: roxmltree::Node, folders: &[String], skipped: &mut Vec<S
                 key_file: (field("Logontype") == "5" && !key.is_empty()).then_some(key),
                 remote_path: decode_remote_dir(&field("RemoteDir")),
                 local_path: Some(field("LocalDir")),
+                auth: None,
             };
             let protocol_name = match code.as_str() {
                 "2" => "Telnet",
@@ -459,6 +468,7 @@ fn walk_transmit(v: &Value, group: &str, skipped: &mut Vec<String>, out: &mut Ve
                     key_file: Some(get_str(map, &["keyFile", "identityFile", "privateKeyPath", "sshKeyPath"])).filter(|k| !k.is_empty()),
                     remote_path: Some(get_str(map, &["remotePath", "initialRemotePath", "path"])),
                     local_path: Some(get_str(map, &["localPath", "initialLocalPath"])),
+                    auth: None,
                 };
                 keep(entry, &protocol_name, skipped, out);
                 return;
@@ -499,6 +509,177 @@ fn transmit_protocol(v: Option<&Value>) -> (Option<Protocol>, String) {
         _ => None,
     };
     (protocol, name)
+}
+
+// ---------------------------------------------------------------- OpenSSH
+
+/// A `Host` (or `Match`) section and its options, keys lowercased, in file order.
+struct SshBlock {
+    patterns: Vec<String>,
+    options: Vec<(String, String)>,
+}
+
+/// One entry per concrete `Host` alias. Options are resolved like OpenSSH
+/// does: every block whose patterns match contributes, and the first value
+/// for a key wins, so `Host *` at the end supplies defaults.
+fn parse_ssh_config(path: &Path, skipped: &mut Vec<String>) -> AppResult<Vec<Entry>> {
+    // Options before the first Host line apply to every host.
+    let mut blocks = vec![SshBlock { patterns: vec!["*".into()], options: Vec::new() }];
+    read_ssh_config(path, &mut blocks, 0)?;
+
+    let mut aliases: Vec<String> = Vec::new();
+    for b in &blocks[1..] {
+        for p in &b.patterns {
+            if !p.contains(['*', '?', '!']) && !aliases.contains(p) {
+                aliases.push(p.clone());
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for alias in aliases {
+        let mut opts: Vec<(&str, &str)> = Vec::new();
+        for b in blocks.iter().filter(|b| ssh_host_matches(&alias, &b.patterns)) {
+            for (k, v) in &b.options {
+                if !opts.iter().any(|(seen, _)| seen == k) {
+                    opts.push((k, v));
+                }
+            }
+        }
+        let opt = |k: &str| opts.iter().find(|(key, _)| *key == k).map(|(_, v)| v.to_string());
+        if opt("proxyjump").is_some_and(|v| v != "none") || opt("proxycommand").is_some_and(|v| v != "none") {
+            skipped.push(tr!(
+                "{alias}: goes through a jump host, which Kade doesn't support yet",
+                "{alias}: loopt via een jump host, dat kan Kade nog niet",
+                alias = alias
+            ));
+            continue;
+        }
+        let user = opt("user").unwrap_or_else(|| std::env::var("USER").unwrap_or_default());
+        if user == "git" {
+            skipped.push(tr!("{alias}: a Git host", "{alias}: een Git-host", alias = alias));
+            continue;
+        }
+        let agent = opt("identityagent").unwrap_or_default();
+        let key = opt("identityfile").filter(|k| k != "none");
+        let auth = if agent.to_lowercase().contains("1password") {
+            Auth::OnePassword { key_fingerprint: None, account: None, key_item: None }
+        } else if let Some(path) = key.clone() {
+            Auth::KeyFile { path }
+        } else {
+            Auth::Agent { key_fingerprint: None }
+        };
+        out.push(Entry {
+            name: alias.clone(),
+            protocol: Some(Protocol::Sftp),
+            host: opt("hostname").map(|h| h.replace("%h", &alias)).unwrap_or_else(|| alias.clone()),
+            port: opt("port").and_then(|p| p.parse().ok()),
+            user,
+            group: "SSH config".into(),
+            key_file: key,
+            auth: Some(auth),
+            ..Entry::default()
+        });
+    }
+    Ok(out)
+}
+
+fn read_ssh_config(path: &Path, blocks: &mut Vec<SshBlock>, depth: usize) -> AppResult<()> {
+    if depth > 8 {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // `Key value`, `Key=value` or `Key = value`.
+        let split = line.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(line.len());
+        let key = line[..split].to_lowercase();
+        let value = line[split..].trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+        let value = value.trim_matches('"').to_string();
+        match key.as_str() {
+            "host" => blocks.push(SshBlock { patterns: value.split_whitespace().map(str::to_string).collect(), options: Vec::new() }),
+            // Match conditions aren't evaluated; only `Match all` applies everywhere.
+            "match" => {
+                let patterns = if value.eq_ignore_ascii_case("all") { vec!["*".into()] } else { Vec::new() };
+                blocks.push(SshBlock { patterns, options: Vec::new() });
+            }
+            "include" => {
+                for pattern in value.split_whitespace() {
+                    for file in ssh_include_files(pattern) {
+                        read_ssh_config(&file, blocks, depth + 1)?;
+                    }
+                }
+            }
+            _ => {
+                if let Some(b) = blocks.last_mut() {
+                    b.options.push((key, value));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `Include` paths: `~` expanded, relative to ~/.ssh, `*` and `?` allowed in the file name.
+fn ssh_include_files(pattern: &str) -> Vec<PathBuf> {
+    let path = match pattern.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None if pattern.starts_with('/') => PathBuf::from(pattern),
+        None => home().join(".ssh").join(pattern),
+    };
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if !name.contains(['*', '?']) {
+        return if path.is_file() { vec![path] } else { Vec::new() };
+    }
+    let Some(dir) = path.parent() else { return Vec::new() };
+    let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = read
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && glob(&name, &p.file_name().unwrap_or_default().to_string_lossy()))
+        .collect();
+    files.sort();
+    files
+}
+
+/// OpenSSH host matching: a negated pattern that matches excludes the host.
+fn ssh_host_matches(host: &str, patterns: &[String]) -> bool {
+    let mut hit = false;
+    for p in patterns {
+        match p.strip_prefix('!') {
+            Some(neg) if glob(neg, host) => return false,
+            Some(_) => {}
+            None => hit |= glob(p, host),
+        }
+    }
+    hit
+}
+
+/// `*` and `?` wildcards, case-insensitive like OpenSSH host names.
+fn glob(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let (mut pi, mut ti, mut star, mut mark) = (0, 0, None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
 }
 
 fn unreadable(path: &Path, e: impl std::fmt::Display) -> AppError {
@@ -628,6 +809,42 @@ mod tests {
         let e = parse_transmit(&bytes, &mut skipped).unwrap();
         assert_eq!(e.len(), 1);
         assert_eq!((e[0].host.as_str(), e[0].group.as_str(), e[0].protocol), ("ftp.example.com", "Clients", Some(Protocol::Ftps)));
+    }
+
+    #[test]
+    fn ssh_config_first_value_wins() {
+        let dir = std::env::temp_dir().join(format!("kade-ssh-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("extra"), "Host db\n  HostName 10.0.0.9\n  User postgres\n").unwrap();
+        std::fs::write(
+            dir.join("config"),
+            format!(
+                "Include {}/extra\n\nHost web web-alias\n  HostName web.example.com\n  Port=2222\n  IdentityFile ~/.ssh/id_web\n\n\
+                 Host bastion-only\n  ProxyJump bastion\n\nHost github.com\n  User git\n\nHost *.internal !skip.internal\n  User ops\n\n\
+                 Host *\n  User fallback\n  IdentityAgent \"~/.1password/agent.sock\"\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        let mut skipped = Vec::new();
+        let e = parse_ssh_config(&dir.join("config"), &mut skipped).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let names: Vec<&str> = e.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["db", "web", "web-alias"]);
+        assert_eq!((e[0].host.as_str(), e[0].user.as_str()), ("10.0.0.9", "postgres"));
+        assert_eq!((e[1].host.as_str(), e[1].port, e[1].user.as_str()), ("web.example.com", Some(2222), "fallback"));
+        // The 1Password agent from `Host *` wins over the key file for signing in.
+        assert!(matches!(e[1].auth, Some(Auth::OnePassword { .. })));
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+    }
+
+    #[test]
+    fn ssh_patterns() {
+        let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(ssh_host_matches("a.internal", &p(&["*.internal", "!skip.internal"])));
+        assert!(!ssh_host_matches("skip.internal", &p(&["*.internal", "!skip.internal"])));
+        assert!(glob("web-??", "WEB-01"));
+        assert!(!glob("web-?", "web-01"));
     }
 
     #[test]
