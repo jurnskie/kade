@@ -77,7 +77,7 @@ pub struct OpSshKey {
 }
 
 async fn op_raw(args: &[&str], account: Option<&str>) -> AppResult<String> {
-    let mut cmd = Command::new("op");
+    let mut cmd = crate::hostenv::async_command("op");
     cmd.args(args);
     if let Some(account) = account.filter(|a| !a.is_empty()) {
         cmd.args(["--account", account]);

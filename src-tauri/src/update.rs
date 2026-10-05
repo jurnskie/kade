@@ -79,15 +79,17 @@ fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 async fn curl(args: &[&str]) -> AppResult<String> {
-    let out =
-        Command::new("curl").args(["-fsSL", "--proto", "=https", "--retry", "2", "-A", "kade-updater"]).args(args).output().await.map_err(
-            |_| {
-                AppError::other(tr!(
-                    "curl not found; install it to check for updates",
-                    "curl niet gevonden; installeer die om op updates te controleren"
-                ))
-            },
-        )?;
+    let out = crate::hostenv::async_command("curl")
+        .args(["-fsSL", "--proto", "=https", "--retry", "2", "-A", "kade-updater"])
+        .args(args)
+        .output()
+        .await
+        .map_err(|_| {
+            AppError::other(tr!(
+                "curl not found; install it to check for updates",
+                "curl niet gevonden; installeer die om op updates te controleren"
+            ))
+        })?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(AppError::other(tr!("Can't reach GitHub: {e}", "GitHub is niet bereikbaar: {e}", e = err)));
@@ -163,7 +165,7 @@ pub async fn install(app: AppHandle, version: String) -> AppResult<()> {
                     }
                 }
                 progress(&app, &tr!("Restarting…", "Herstarten…"));
-                std::process::Command::new(&target).spawn()?;
+                crate::hostenv::command(&target).spawn()?;
                 Ok(())
             }
             InstallKind::MacApp { path } => {

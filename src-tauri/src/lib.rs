@@ -8,6 +8,7 @@ mod editors;
 mod error;
 mod fs;
 mod ftp;
+mod hostenv;
 mod importer;
 mod mcp;
 mod onepassword;

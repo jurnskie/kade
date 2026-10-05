@@ -201,6 +201,11 @@ pub fn launch(editor: &str, path: &Path) -> AppResult<()> {
         if crate::editors::on_path("omarchy-launch-editor") {
             return launch("omarchy-launch-editor", path);
         }
+        // xdg-open directly rather than via the opener plugin, so it gets a
+        // clean environment when Kade runs as an AppImage.
+        if cfg!(target_os = "linux") {
+            return launch("xdg-open", path);
+        }
         return tauri_plugin_opener::open_path(path, None::<&str>).map_err(AppError::other);
     }
     let mut parts = shlex::split(editor).ok_or_else(|| AppError::other(tr!("Invalid editor command", "Ongeldige editor-opdracht")))?;
@@ -213,7 +218,7 @@ pub fn launch(editor: &str, path: &Path) -> AppResult<()> {
         parts.push(file);
     }
     let (program, args) = parts.split_first().ok_or_else(|| AppError::other(tr!("Empty editor command", "Lege editor-opdracht")))?;
-    std::process::Command::new(program)
+    crate::hostenv::command(program)
         .args(args)
         .spawn()
         .map_err(|e| AppError::other(tr!("Can't start {program}: {e}", "Kan {program} niet starten: {e}", program = program, e = e)))?;
