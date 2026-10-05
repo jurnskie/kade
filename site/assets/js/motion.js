@@ -89,24 +89,41 @@
     scrollTrigger: { trigger: ".tour", start: "top bottom", end: "top top", scrub: true },
   });
 
+  // The wipe moves the incoming frame in while its picture moves the other
+  // way, and the outgoing picture is pushed back under a darkening shade:
+  // transforms and opacity only, so it all stays on the GPU. Letting go of the
+  // scroll settles on the nearest whole chapter.
+  const masks = $$(".ch-img");
+  const pics = masks.map((m) => $("img", m));
+  const shades = masks.map((m) => $(".shade", m));
+  gsap.set(masks.slice(1), { xPercent: 100 });
+  gsap.set(pics.slice(1), { xPercent: -100 });
   const tour = gsap.timeline({
-    scrollTrigger: { trigger: ".tour-pin", start: "top top", end: () => "+=" + n * 85 + "%", scrub: 0.6, pin: true, anticipatePin: 1 },
+    defaults: { ease: "power3.inOut" },
+    scrollTrigger: {
+      trigger: ".tour-pin",
+      start: "top top",
+      end: () => "+=" + n * 85 + "%",
+      scrub: 1,
+      pin: true,
+      anticipatePin: 1,
+      snap: { snapTo: "labels", duration: { min: 0.25, max: 0.7 }, delay: 0.08, ease: "power2.inOut" },
+    },
   });
-  tour.to(bars[0], { scaleX: 1, ease: "none", duration: 1 }, 0);
+  tour.addLabel("ch0", 0).to(bars[0], { scaleX: 1, ease: "none", duration: 1 }, 0);
   for (let i = 1; i < n; i++) {
     tour
-      .to(txts[i - 1], { y: -40, opacity: 0, duration: 0.22, ease: "power2.in" }, i)
-      .fromTo(txts[i], { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.35, ease: "power2.out" }, i + 0.3)
-      .fromTo(
-        imgs[i],
-        { clipPath: "inset(0 0 0 100% round 16px)", scale: 1.08 },
-        { clipPath: "inset(0 0 0 0% round 16px)", scale: 1, duration: 0.6, ease: "power3.inOut" },
-        i,
-      )
-      .to(imgs[i - 1], { scale: 0.94, filter: "brightness(.45)", duration: 0.6, ease: "power3.inOut" }, i)
-      .to(bars[i], { scaleX: 1, ease: "none", duration: 1 }, i);
+      .fromTo(masks[i], { xPercent: 100 }, { xPercent: 0, duration: 0.7 }, i)
+      .fromTo(pics[i], { xPercent: -100, scale: 1.06 }, { xPercent: 0, scale: 1, duration: 0.7 }, i)
+      .to(pics[i - 1], { xPercent: -16, scale: 0.97, duration: 0.7 }, i)
+      .to(shades[i - 1], { opacity: 0.6, duration: 0.7 }, i)
+      .to(txts[i - 1], { y: -32, autoAlpha: 0, duration: 0.25, ease: "power2.in" }, i)
+      .fromTo(txts[i], { y: 32, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.35, ease: "power2.out" }, i + 0.35)
+      .to(bars[i], { scaleX: 1, ease: "none", duration: 1 }, i)
+      .addLabel("ch" + i, i + 0.7);
   }
-  tour.fromTo(".device", { rotateY: -9, rotateX: 5 }, { rotateY: 7, rotateX: -2, ease: "none", duration: n }, 0);
+  tour.addLabel("end", n);
+  tour.fromTo(".device", { rotateY: -6, rotateX: 4, transformPerspective: 1800 }, { rotateY: 6, rotateX: -1, ease: "none", duration: n }, 0);
 
   /* ---------- 4. Import: bookmarks sail into Kade and moor ---------- */
   const harbour = gsap

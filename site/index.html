@@ -263,10 +263,15 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
 .motion .ch-txt[data-ch="0"]{opacity:1}
 .motion .ch-n{display:block;font-size:12px;color:var(--dim);margin-top:18px;letter-spacing:.08em}
 .motion .tour-device{perspective:1800px}
-.motion .device{display:block;position:relative;aspect-ratio:2880/1760;border-radius:16px;transform-style:preserve-3d;
-  box-shadow:0 0 0 1px rgba(233,241,238,.16),0 80px 140px -40px rgba(0,0,0,.85),0 0 180px -40px rgba(244,181,68,.35)}
-.motion .ch-img{position:absolute;inset:0;box-shadow:none;border-radius:16px;clip-path:inset(0 0 0 100% round 16px)}
-.motion .ch-img[data-ch="0"]{clip-path:inset(0 0 0 0 round 16px)}
+.motion .tour-device{position:relative}
+.motion .tour-device::before{content:"";position:absolute;inset:6% 4% -4%;border-radius:24px;z-index:-1;
+  box-shadow:0 80px 140px -40px rgba(0,0,0,.85),0 0 180px -40px rgba(244,181,68,.35)}
+.motion .device{display:block;position:relative;aspect-ratio:2880/1760;border-radius:16px;outline:1px solid rgba(233,241,238,.16);outline-offset:-1px}
+.shade{display:none}
+.motion .device{overflow:hidden;isolation:isolate;will-change:transform}
+.motion .ch-img{position:absolute;inset:0;box-shadow:none;border-radius:0;overflow:hidden;will-change:transform}
+.motion .ch-img img{will-change:transform;backface-visibility:hidden}
+.motion .shade{display:block;position:absolute;inset:0;background:#04100C;opacity:0;pointer-events:none}
 .motion .tour-progress{display:flex;gap:8px;position:absolute;left:0;bottom:56px}
 .motion .tour-progress i{width:44px;height:3px;border-radius:2px;background:rgba(233,241,238,.14);overflow:hidden}
 .motion .tour-progress b{display:block;height:100%;width:100%;background:var(--lamp);transform:scaleX(0);transform-origin:0 50%}
@@ -370,11 +375,11 @@ footer{position:relative}
       <div class="ch-txt" data-ch="4"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>Quick open</div><span class="ch-n mono">05 / 05</span><h3>Any server, two keys away. <span class="kbd"><b>Ctrl</b><b>K</b></span></h3><p>Search every connection across your Home and Work workspaces, and jump straight in.</p></div>
       </div>
       <div class="tour-device"><div class="device">
-        <div class="ch-img" data-ch="0"><img src="assets/main.png" width="2880" height="1760" alt="Kade with a local folder and a website on the server side by side"></div>
-        <div class="ch-img" data-ch="1"><img src="assets/tunnels-dark.png" width="2880" height="1760" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"></div>
-        <div class="ch-img" data-ch="2"><img src="assets/status.png" width="2880" height="1760" alt="Server status with CPU, memory, disks and processes"></div>
-        <div class="ch-img" data-ch="3"><img src="assets/backups.png" width="2880" height="1760" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"></div>
-        <div class="ch-img" data-ch="4"><img src="assets/switcher.png" width="2880" height="1760" alt="Quick open: find any connection with Ctrl K"></div>
+        <div class="ch-img" data-ch="0"><img src="assets/tour/main.webp" width="1600" height="978" decoding="async" alt="Kade with a local folder and a website on the server side by side"><i class="shade"></i></div>
+        <div class="ch-img" data-ch="1"><img src="assets/tour/tunnels-dark.webp" width="1600" height="978" decoding="async" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"><i class="shade"></i></div>
+        <div class="ch-img" data-ch="2"><img src="assets/tour/status.webp" width="1600" height="978" decoding="async" alt="Server status with CPU, memory, disks and processes"><i class="shade"></i></div>
+        <div class="ch-img" data-ch="3"><img src="assets/tour/backups.webp" width="1600" height="978" decoding="async" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"><i class="shade"></i></div>
+        <div class="ch-img" data-ch="4"><img src="assets/tour/switcher.webp" width="1600" height="978" decoding="async" alt="Quick open: find any connection with Ctrl K"><i class="shade"></i></div>
       </div></div>
       <div class="tour-progress" aria-hidden="true"><i><b></b></i><i><b></b></i><i><b></b></i><i><b></b></i><i><b></b></i></div>
     </div>
