@@ -4,6 +4,7 @@
   import { Settings as Gear, X, FolderSync, CloudCheck, GitMerge } from "@lucide/svelte";
   import { listen } from "@tauri-apps/api/event";
   import { i18n, t, tn, type LangChoice } from "$lib/i18n.svelte";
+  import { theme, type ThemeChoice } from "$lib/theme.svelte";
   import { api, errorMessage, type EditorChoice, type McpStatus, type Settings, type SyncStatus, type UpdateInfo } from "$lib/api";
 
   let { settings, onchange, onclose }: { settings: Settings; onchange: () => void; onclose: () => void } = $props();
@@ -154,6 +155,18 @@
   </section>
 
   <section>
+    <div class="lbl">{t("Appearance")}</div>
+    <label class="row">
+      {t("Theme")}
+      <select value={theme.choice} onchange={(e) => theme.set((e.target as HTMLSelectElement).value as ThemeChoice)}>
+        <option value="auto">{t("Automatic (system)")}</option>
+        <option value="light">{t("Light")}</option>
+        <option value="dark">{t("Dark")}</option>
+      </select>
+    </label>
+  </section>
+
+  <section>
     <div class="lbl">{t("Language")}</div>
     <label class="row">
       {t("Language of the app")}
@@ -296,7 +309,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     z-index: 10;
   }
@@ -310,7 +323,7 @@
     overflow-y: auto;
     background: var(--paper);
     border-radius: 16px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28);
+    box-shadow: var(--shadow-lg);
     z-index: 11;
     padding: 20px 22px 22px;
     display: flex;

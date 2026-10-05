@@ -471,7 +471,7 @@
     outline: none;
   }
   .pane:focus-within {
-    border-color: #cfd7d1;
+    border-color: var(--line-strong);
   }
   .menu {
     position: fixed;
@@ -481,7 +481,7 @@
     border: 1px solid var(--mist);
     border-radius: 10px;
     padding: 5px;
-    box-shadow: 0 12px 32px rgba(15, 21, 19, 0.16);
+    box-shadow: var(--shadow-md);
     display: flex;
     flex-direction: column;
   }
@@ -527,7 +527,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.25);
+    background: var(--scrim);
     z-index: 41;
   }
   .dlg {
@@ -539,7 +539,7 @@
     background: var(--paper);
     border-radius: 14px;
     padding: 18px 20px 16px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28);
+    box-shadow: var(--shadow-lg);
     z-index: 42;
     display: flex;
     flex-direction: column;
@@ -688,7 +688,7 @@
     white-space: nowrap;
   }
   tr:hover td {
-    background: #fafbf9;
+    background: var(--zebra);
   }
   td.n {
     width: 100%;

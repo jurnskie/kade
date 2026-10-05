@@ -62,6 +62,9 @@ pub struct ServerProfile {
     /// Workspace id; empty means the default workspace.
     #[serde(default)]
     pub workspace: String,
+    /// SSH tunnels (local port forwards) saved with this connection.
+    #[serde(default)]
+    pub tunnels: Vec<crate::tunnel::Tunnel>,
     /// Last edit (unix ms); the newest copy wins when synced files diverge.
     #[serde(default)]
     pub updated_at: i64,
@@ -74,6 +77,20 @@ pub fn list() -> AppResult<Vec<ServerProfile>> {
 pub fn upsert(mut profile: ServerProfile) -> AppResult<ServerProfile> {
     if profile.id.is_empty() {
         profile.id = uuid::Uuid::new_v4().to_string();
+    }
+    let mut ports = std::collections::HashSet::new();
+    for t in &mut profile.tunnels {
+        crate::tunnel::validate(t)?;
+        if !ports.insert(t.local_port) {
+            return Err(AppError::other(tr!(
+                "Two tunnels use local port {port}",
+                "Twee tunnels gebruiken lokale poort {port}",
+                port = t.local_port
+            )));
+        }
+        if t.id.is_empty() {
+            t.id = uuid::Uuid::new_v4().to_string();
+        }
     }
     profile.updated_at = store::now_ms();
     store::update(|data| {

@@ -75,6 +75,7 @@ async fn scenario(base: &Path) {
         remote_path: None,
         local_path: None,
         workspace: String::new(),
+        tunnels: Vec::new(),
         updated_at: 0,
     };
 
@@ -171,6 +172,7 @@ async fn e2e_speed() {
         remote_path: None,
         local_path: None,
         workspace: String::new(),
+        tunnels: Vec::new(),
         updated_at: 0,
     };
     let fp = match ssh::connect(&profile, None, None).await {
@@ -220,6 +222,7 @@ async fn e2e_ftp() {
             remote_path: None,
             local_path: None,
             workspace: String::new(),
+            tunnels: Vec::new(),
             updated_at: 0,
         };
         // Without a password Kade must ask for one.
@@ -316,6 +319,7 @@ async fn probe_live() {
         remote_path: None,
         local_path: None,
         workspace: String::new(),
+        tunnels: Vec::new(),
         updated_at: 0,
     };
     let t = std::time::Instant::now();
@@ -355,6 +359,7 @@ async fn e2e_edit() {
         remote_path: None,
         local_path: None,
         workspace: String::new(),
+        tunnels: Vec::new(),
         updated_at: 0,
     };
     let fp = match ssh::connect(&profile, None, None).await {
@@ -451,6 +456,7 @@ async fn e2e_network_errors() {
         remote_path: None,
         local_path: None,
         workspace: String::new(),
+        tunnels: Vec::new(),
         updated_at: 0,
     };
     let err = |r: Result<(Session, ssh::Connected), AppError>| match r {
@@ -469,4 +475,93 @@ async fn e2e_network_errors() {
     let ftp = err(ssh::connect(&profile, Some("x".into()), None).await);
     eprintln!("NET ftp dns: {ftp}");
     assert!(ftp.contains("does-not-exist.invalid") && ftp.contains("Tailscale"));
+}
+
+/// Status and tunnels over a real SSH connection. Same setup as e2e_transfer;
+/// the server is this machine, so a local echo server stands in for a database.
+#[tokio::test]
+#[ignore]
+async fn e2e_status_and_tunnel() {
+    use crate::tunnel::{Tunnel, Tunnels};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let port: u16 = std::env::var("KADE_E2E_PORT").expect("KADE_E2E_PORT").parse().unwrap();
+    let key = std::env::var("KADE_E2E_KEY").expect("KADE_E2E_KEY");
+    let tmp = std::env::temp_dir().join(format!("kade-e2e-tun-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("KADE_KNOWN_HOSTS", tmp.join("known_hosts"));
+    let profile = ServerProfile {
+        id: "tun".into(),
+        name: "tun".into(),
+        protocol: Protocol::Ssh,
+        host: "127.0.0.1".into(),
+        port,
+        user: std::env::var("USER").unwrap(),
+        group: String::new(),
+        auth: Auth::KeyFile { path: key },
+        remote_path: None,
+        local_path: None,
+        workspace: String::new(),
+        tunnels: Vec::new(),
+        updated_at: 0,
+    };
+    let fp = match ssh::connect(&profile, None, None).await {
+        Err(AppError::HostKeyUnknown { fingerprint, .. }) => fingerprint,
+        _ => panic!("expected unknown host"),
+    };
+    let session = Arc::new(ssh::connect(&profile, None, Some(fp)).await.unwrap().0);
+
+    let status = crate::status::fetch(&session).await.unwrap();
+    assert!(status.hostname.is_some(), "{status:?}");
+    assert!(status.mem_total.unwrap() > 0 && status.cpus.unwrap() > 0, "{status:?}");
+    assert!(status.cpu_percent.is_some() && !status.disks.is_empty(), "{status:?}");
+
+    // "Remote" echo server on a free port.
+    let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = echo.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = s.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    let local_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let tunnel = Tunnel {
+        id: "db".into(),
+        name: "echo".into(),
+        local_port,
+        remote_host: "127.0.0.1".into(),
+        remote_port: echo_port,
+        auto_start: false,
+    };
+    let tunnels = Tunnels::default();
+    let notify: crate::tunnel::Notify = Arc::new(|_| {});
+    tunnels.start(session.clone(), "s", &tunnel, notify.clone()).await.unwrap();
+
+    // Two connections at once through the tunnel, each echoed back.
+    let mut a = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
+    let mut b = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
+    for (conn, msg) in [(&mut a, b"hello a".as_slice()), (&mut b, b"hello b".as_slice())] {
+        conn.write_all(msg).await.unwrap();
+        let mut buf = vec![0; msg.len()];
+        tokio::time::timeout(std::time::Duration::from_secs(5), conn.read_exact(&mut buf)).await.unwrap().unwrap();
+        assert_eq!(buf, msg);
+    }
+    let state = tunnels.list("s");
+    assert_eq!((state.len(), state[0].open, state[0].total), (1, 2, 2));
+
+    // The same local port can't be used twice.
+    let clash = Tunnel { id: "other".into(), ..tunnel.clone() };
+    assert!(tunnels.start(session.clone(), "s", &clash, notify).await.unwrap_err().to_string().contains(&local_port.to_string()));
+
+    // Stopping frees the port.
+    tunnels.stop("s", "db");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    std::net::TcpListener::bind(("127.0.0.1", local_port)).expect("port freed after stop");
+    std::fs::remove_dir_all(tmp).unwrap();
 }

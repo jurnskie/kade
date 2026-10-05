@@ -10,6 +10,9 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
 - **Two panes**, local and server, with drag and drop and a right-click menu: new file or folder, rename,
   delete, edit.
 - **Terminal** over the same SSH connection (xterm.js).
+- **Tunnels**: forward ports from the server to this computer (like `ssh -L`), saved per connection and
+  optionally started on connect. Handy for a database client or an admin page that only listens locally.
+- **Status**: CPU, memory, disks and the busiest processes of a server, refreshed live.
 - **Edit in your own editor**: double-click a server file and Kade uploads it every time you save.
 - **Backups of everything Kade deletes or overwrites**, kept for a configurable number of days and restorable
   with one click.
@@ -20,6 +23,7 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
 - **MCP server** inside the app (Settings → AI assistants), so an assistant such as Claude Code can add, change,
   test and open connections. Off by default; listens on 127.0.0.1 only and requires a token.
 - **Updates** from inside the app (Settings → About Kade).
+- **Light and dark**, following the system or chosen in Settings → Appearance.
 - **English and Dutch**, chosen automatically or in Settings → Language.
 
 <table>
@@ -30,6 +34,14 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
   <tr>
     <td align="center"><sub>Quick open (Ctrl K) across workspaces</sub></td>
     <td align="center"><sub>Every delete and overwrite can be restored</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tunnels-dark.png" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"></td>
+    <td><img src="docs/screenshots/status.png" alt="Server status with CPU, memory, disks and processes"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Tunnels, in dark mode</sub></td>
+    <td align="center"><sub>Live server status</sub></td>
   </tr>
 </table>
 
@@ -89,7 +101,7 @@ pnpm check                    # Svelte and TypeScript
 cd src-tauri && cargo test    # Rust unit tests
 ```
 
-The end-to-end tests (transfers, backups, restores) need an SSH server that accepts a test key for your own
+The end-to-end tests (transfers, backups, restores, status, tunnels) need an SSH server that accepts a test key for your own
 user, for example an unprivileged `sshd` on `127.0.0.1:2222`:
 
 ```sh

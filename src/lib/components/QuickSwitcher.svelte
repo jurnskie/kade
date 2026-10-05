@@ -110,7 +110,7 @@
           <small class="mono">{s.user}@{s.host}{s.remote_path ? ` · ${s.remote_path}` : ""}</small>
         </span>
         {#if workspaces.length > 1 && wsOf(s)}
-          <span class="wsl" style:color={colorOf(wsOf(s)).color} style:background={colorOf(wsOf(s)).tint}>{wsOf(s)?.name}</span>
+          <span class="wsl" style:color={colorOf(wsOf(s)).ink} style:background={colorOf(wsOf(s)).tint}>{wsOf(s)?.name}</span>
         {/if}
         <span class="group">{s.group || t("Other")}</span>
         {#if connected.has(s.id)}<span class="dot" title={t("Connected")}></span>{/if}
@@ -135,7 +135,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.25);
+    background: var(--scrim);
     z-index: 30;
   }
   .qs {
@@ -149,7 +149,7 @@
     flex-direction: column;
     background: var(--paper);
     border-radius: 14px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.3), 0 0 0 1px rgba(30, 35, 33, 0.06);
+    box-shadow: var(--shadow-lg), 0 0 0 1px var(--mist);
     z-index: 31;
     overflow: hidden;
   }

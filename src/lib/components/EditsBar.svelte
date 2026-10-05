@@ -72,12 +72,12 @@
   }
   .ed.conflict {
     background: var(--amber-t);
-    border-color: #ead7b4;
-    color: #7a5212;
+    border-color: var(--amber-line);
+    color: var(--amber-ink);
   }
   .ed.error {
     background: var(--danger-t);
-    border-color: #ecc9c2;
+    border-color: var(--danger-line);
     color: var(--danger);
   }
   .ic {

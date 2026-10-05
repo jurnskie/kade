@@ -410,6 +410,7 @@ mod tests {
             remote_path: None,
             local_path: None,
             workspace: String::new(),
+            tunnels: Vec::new(),
             updated_at,
         }
     }

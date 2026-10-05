@@ -315,11 +315,13 @@ async fn connect_ftp(profile: &ServerProfile, password: Option<String>) -> AppRe
     }
     let password = resolve_password(&profile.auth, password).await?;
     let (ftp, home) = crate::ftp::connect(profile, &password).await?;
-    let label = match (&profile.auth, profile.protocol) {
-        (Auth::OnePasswordSecret { .. }, Protocol::Ftps) => "1Password · FTPS (TLS)",
-        (Auth::OnePasswordSecret { .. }, _) => "1Password · FTP onversleuteld",
-        (_, Protocol::Ftps) => "wachtwoord · FTPS (TLS)",
-        _ => "wachtwoord · FTP onversleuteld",
+    let source = match profile.auth {
+        Auth::OnePasswordSecret { .. } => "1Password".to_string(),
+        _ => tr!("password", "wachtwoord"),
+    };
+    let label = match profile.protocol {
+        Protocol::Ftps => format!("{source} · FTPS (TLS)"),
+        _ => tr!("{source} · FTP unencrypted", "{source} · FTP onversleuteld", source = source),
     };
     let session = Session {
         ssh: None,
@@ -328,7 +330,7 @@ async fn connect_ftp(profile: &ServerProfile, password: Option<String>) -> AppRe
         server_name: profile.name.clone(),
         remote_home: Some(home.clone()),
     };
-    Ok((session, home, label.into()))
+    Ok((session, home, label))
 }
 
 async fn connect_ssh(

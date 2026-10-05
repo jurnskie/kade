@@ -139,7 +139,7 @@
 <aside class="side" class:rail={collapsed}>
   <div class="brand">
     <button class="mark" title={collapsed ? t("Expand sidebar") : "Kade"} onclick={() => (collapsed = false)}>
-      <Anchor size={16} color="#fff" />
+      <Anchor size={16} color="var(--on-pine)" />
     </button>
     {#if !collapsed}
       <b>Kade</b>
@@ -318,7 +318,7 @@
     border: 1px solid var(--mist);
     border-radius: 10px;
     padding: 5px;
-    box-shadow: 0 12px 32px rgba(15, 21, 19, 0.16);
+    box-shadow: var(--shadow-md);
   }
   .ws-item {
     display: flex;
@@ -393,7 +393,7 @@
     text-align: left;
   }
   .search:hover {
-    border-color: #cfd6d1;
+    border-color: var(--line-strong);
   }
   .search span {
     flex: 1;
@@ -442,7 +442,7 @@
   }
   button.grp:hover {
     color: var(--ink2);
-    background: rgba(255, 255, 255, 0.5);
+    background: var(--glass);
   }
   .grp.static {
     padding-left: 8px;
@@ -476,11 +476,11 @@
     border-radius: 7px;
   }
   .srv:hover {
-    background: rgba(255, 255, 255, 0.6);
+    background: var(--glass);
   }
   .srv.on {
     background: var(--paper);
-    box-shadow: 0 1px 0 rgba(30, 35, 33, 0.06), 0 0 0 1px var(--mist);
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--mist);
   }
   .ic {
     display: grid;
@@ -529,7 +529,7 @@
   }
   .dot.off {
     background: transparent;
-    border: 1.5px solid #b9c1bc;
+    border: 1.5px solid var(--control);
   }
   .dot.busy {
     background: var(--amber);
@@ -594,7 +594,7 @@
     height: 1px;
     padding: 0;
     margin: 8px 10px;
-    background: #cfd6d1;
+    background: var(--line-strong);
     pointer-events: none;
   }
   .rail .grp:first-child {

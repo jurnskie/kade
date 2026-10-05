@@ -153,7 +153,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     z-index: 20;
   }
@@ -165,7 +165,7 @@
     width: min(440px, calc(100vw - 32px));
     background: var(--paper);
     border-radius: 14px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28);
+    box-shadow: var(--shadow-lg);
     z-index: 21;
     padding: 18px 20px 16px;
     display: flex;
@@ -265,6 +265,6 @@
   .danger-fill {
     background: var(--danger);
     border-color: var(--danger);
-    color: #fff;
+    color: var(--on-danger);
   }
 </style>

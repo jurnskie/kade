@@ -238,6 +238,7 @@
       remote_path: remotePath.trim() || null,
       local_path: localPath.trim() || null,
       workspace,
+      tunnels: initial?.tunnels ?? [],
       updated_at: initial?.updated_at ?? 0,
     };
   }
@@ -539,7 +540,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     z-index: 10;
   }
@@ -554,7 +555,7 @@
     flex-direction: column;
     background: var(--paper);
     border-radius: 16px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28), 0 0 0 1px rgba(30, 35, 33, 0.06);
+    box-shadow: var(--shadow-lg), 0 0 0 1px var(--mist);
     overflow: hidden;
     z-index: 11;
     user-select: text;
@@ -680,7 +681,7 @@
     font-size: 12.5px;
   }
   .in input::placeholder {
-    color: #a9b1ac;
+    color: var(--faint);
   }
   .row {
     display: grid;
@@ -718,7 +719,7 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    border: 1.5px solid #b9c1bc;
+    border: 1.5px solid var(--control);
     flex: none;
     margin-top: 2px;
   }
@@ -766,7 +767,7 @@
   .seg button.on {
     background: var(--paper);
     color: var(--granite);
-    box-shadow: 0 1px 2px rgba(30, 35, 33, 0.08);
+    box-shadow: var(--shadow-sm);
   }
   .wspick {
     display: flex;
@@ -818,7 +819,7 @@
     padding: 8px 10px;
     border-radius: 8px;
     background: var(--amber-t);
-    color: #7a5212;
+    color: var(--amber-ink);
     font-size: 12px;
     line-height: 1.45;
   }
@@ -888,7 +889,7 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 1.5px solid #b9c1bc;
+    border: 1.5px solid var(--control);
     flex: none;
     margin-top: 3px;
   }

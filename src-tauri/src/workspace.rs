@@ -106,6 +106,7 @@ mod tests {
             remote_path: None,
             local_path: None,
             workspace: werk.id.clone(),
+            tunnels: Vec::new(),
             updated_at: 0,
         })
         .unwrap();

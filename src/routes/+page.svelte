@@ -15,6 +15,7 @@
     LoaderCircle,
     Anchor,
     Undo2,
+    Cable,
   } from "@lucide/svelte";
   import { api, errorMessage, localOps, remoteOps, type AppError, type ServerProfile } from "$lib/api";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -22,6 +23,8 @@
   import ConnectDialog from "$lib/components/ConnectDialog.svelte";
   import OnePasswordIcon from "$lib/components/OnePasswordIcon.svelte";
   import TerminalView from "$lib/components/TerminalView.svelte";
+  import StatusView from "$lib/components/StatusView.svelte";
+  import TunnelsView from "$lib/components/TunnelsView.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import BackupsDialog from "$lib/components/BackupsDialog.svelte";
   import QuickSwitcher from "$lib/components/QuickSwitcher.svelte";
@@ -45,7 +48,7 @@
     localPath: string;
     hasFiles: boolean;
     hasTerminal: boolean;
-    view: "files" | "terminal";
+    view: "files" | "terminal" | "tunnels" | "status";
     /** Mount the terminal lazily, then keep it alive across view/tab switches. */
     terminalStarted: boolean;
     localRefresh: number;
@@ -291,6 +294,12 @@
         remoteRefresh: 0,
       });
       activeId = c.session_id;
+      // Tunnels marked "start automatically" come up with the connection.
+      if (c.has_terminal) {
+        for (const tun of server.tunnels ?? []) {
+          if (tun.auto_start) api.tunnelStart(c.session_id, tun.id).catch(showError);
+        }
+      }
     } catch (e) {
       const err = e as AppError;
       if (err?.kind === "host_key_unknown") {
@@ -334,6 +343,14 @@
     }
   }
 
+  /** Save a profile from inside a tab (tunnels); errors go back to the caller. */
+  async function saveFromTab(profile: ServerProfile): Promise<ServerProfile> {
+    const saved = await api.saveServer(profile);
+    servers = await api.listServers();
+    for (const t of tabs) if (t.server.id === saved.id) t.server = saved;
+    return saved;
+  }
+
   async function remove(profile: ServerProfile) {
     if (!confirm(t("Delete “{name}”?", { name: profile.name }))) return;
     try {
@@ -364,7 +381,7 @@
 
   function setView(tab: Tab, view: Tab["view"]) {
     if (view === "files" && !tab.hasFiles) return;
-    if (view === "terminal" && !tab.hasTerminal) return;
+    if (view !== "files" && !tab.hasTerminal) return;
     if (view === "terminal") tab.terminalStarted = true;
     tab.view = view;
   }
@@ -456,7 +473,23 @@
           >
             <SquareTerminal size={16} /><span class="txt">Terminal</span>
           </button>
-          <span class="soon" title={t("Status — coming soon")}><Activity size={16} /><span class="txt">Status</span></span>
+          <button
+            class:on={active.view === "tunnels"}
+            disabled={!active.hasTerminal}
+            title={active.hasTerminal ? t("Tunnels") : t("Tunnels need SSH")}
+            onclick={() => setView(active, "tunnels")}
+          >
+            <Cable size={16} /><span class="txt">{t("Tunnels")}</span>
+            {#if active.server.tunnels?.length}<span class="count">{active.server.tunnels.length}</span>{/if}
+          </button>
+          <button
+            class:on={active.view === "status"}
+            disabled={!active.hasTerminal}
+            title={active.hasTerminal ? t("CPU, memory and disks of the server") : t("Status needs SSH")}
+            onclick={() => setView(active, "status")}
+          >
+            <Activity size={16} /><span class="txt">{t("Status")}</span>
+          </button>
         </div>
         <div class="conn">
           <span class="pill" title={active.authLabel}><span class="dot"></span><span class="txt">{t("Connected")}</span></span>
@@ -520,6 +553,16 @@
             <EditsBar sessionId={tab.sessionId} onerror={showError} />
             <TransferQueue sessionId={tab.sessionId} onrestore={restoreBackup} />
           </div>
+        {/if}
+        {#if tab.hasTerminal}
+          <div class="pagewrap" class:hidden={tab.view !== "tunnels"}>
+            <TunnelsView sessionId={tab.sessionId} server={tab.server} onsave={saveFromTab} onerror={showError} />
+          </div>
+          {#if tab.view === "status"}
+            <div class="pagewrap">
+              <StatusView sessionId={tab.sessionId} visible={tab.sessionId === activeId} />
+            </div>
+          {/if}
         {/if}
         {#if tab.terminalStarted}
           <div class="termwrap" class:hidden={tab.view !== "terminal"}>
@@ -692,7 +735,7 @@
 {/if}
 
 {#if toast}
-  <div class="toast" role="alert"><TriangleAlert size={16} color="#fff" />{toast}</div>
+  <div class="toast" role="alert"><TriangleAlert size={16} color="var(--on-danger)" />{toast}</div>
 {/if}
 
 <style>
@@ -799,7 +842,6 @@
     border-radius: 8px;
     padding: 2px;
   }
-  .seg > span,
   .seg > button {
     display: flex;
     align-items: center;
@@ -812,9 +854,24 @@
   .seg button.on {
     background: var(--paper);
     color: var(--granite);
-    box-shadow: 0 1px 2px rgba(30, 35, 33, 0.08);
+    box-shadow: var(--shadow-sm);
   }
-  .seg > span.soon,
+  .seg .count {
+    font: 600 10px var(--mono);
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--mist);
+    color: var(--ink2);
+  }
+  .seg button.on .count {
+    background: var(--pine-t);
+    color: var(--pine);
+  }
+  .pagewrap {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
   .seg button:disabled {
     opacity: 0.45;
     cursor: not-allowed;
@@ -914,7 +971,7 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 33, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     z-index: 20;
   }
@@ -927,7 +984,7 @@
     background: var(--paper);
     border-radius: 14px;
     padding: 22px 24px 18px;
-    box-shadow: 0 30px 80px rgba(15, 21, 19, 0.28);
+    box-shadow: var(--shadow-lg);
     z-index: 21;
     display: flex;
     flex-direction: column;
@@ -1003,19 +1060,19 @@
   .busy {
     background: var(--paper);
     border: 1px solid var(--mist);
-    box-shadow: 0 10px 30px rgba(15, 21, 19, 0.12);
+    box-shadow: var(--shadow-md);
   }
   .drag-ghost {
     position: fixed;
     z-index: 50;
     pointer-events: none;
-    background: var(--granite);
-    color: #fff;
+    background: var(--inverse);
+    color: var(--on-inverse);
     padding: 6px 10px;
     border-radius: 8px;
     font-weight: 500;
     font-size: 12.5px;
-    box-shadow: 0 10px 30px rgba(15, 21, 19, 0.25);
+    box-shadow: var(--shadow-md);
     white-space: nowrap;
   }
   .drag-ghost span {
@@ -1025,7 +1082,8 @@
     font-size: 11px;
   }
   .toast.undo {
-    background: var(--granite);
+    background: var(--inverse);
+    color: var(--on-inverse);
   }
   .toast.undo button {
     display: flex;
@@ -1034,17 +1092,17 @@
     margin-left: 6px;
     padding: 4px 9px;
     border-radius: 6px;
-    background: rgba(255, 255, 255, 0.14);
-    color: #fff;
+    background: color-mix(in srgb, var(--on-inverse) 14%, transparent);
+    color: var(--on-inverse);
     font-weight: 600;
   }
   .toast.undo button:hover {
-    background: rgba(255, 255, 255, 0.24);
+    background: color-mix(in srgb, var(--on-inverse) 24%, transparent);
   }
   .toast {
     background: var(--danger);
-    color: #fff;
-    box-shadow: 0 10px 30px rgba(15, 21, 19, 0.25);
+    color: var(--on-danger);
+    box-shadow: var(--shadow-md);
   }
   /* Narrow main area (half-screen): icon-only toolbar, stacked panes. */
   @container main (max-width: 900px) {
@@ -1060,8 +1118,7 @@
     .bar .txt {
       display: none;
     }
-    .seg > button,
-    .seg > span {
+    .seg > button {
       padding: 5px 8px;
     }
     .pill {

@@ -23,7 +23,43 @@ export interface ServerProfile {
   local_path: string | null;
   /** Workspace id; "" means the default workspace. */
   workspace: string;
+  tunnels: Tunnel[];
   updated_at: number;
+}
+
+/** Local port forward over SSH: localhost:local_port → remote_host:remote_port on the server. */
+export interface Tunnel {
+  id: string;
+  name: string;
+  local_port: number;
+  remote_host: string;
+  remote_port: number;
+  auto_start: boolean;
+}
+
+export interface TunnelState {
+  tunnel_id: string;
+  local_port: number;
+  /** Connections carried right now. */
+  open: number;
+  /** Connections carried since it started. */
+  total: number;
+}
+
+export interface ServerStatus {
+  hostname: string | null;
+  os: string | null;
+  kernel: string | null;
+  uptime_secs: number | null;
+  load: [number, number, number] | null;
+  cpus: number | null;
+  cpu_percent: number | null;
+  mem_total: number | null;
+  mem_available: number | null;
+  swap_total: number | null;
+  swap_free: number | null;
+  disks: { mount: string; filesystem: string; size: number; used: number; available: number }[];
+  processes: { pid: number; cpu: number; mem: number; command: string }[];
 }
 
 export interface Workspace {
@@ -307,4 +343,8 @@ export const api = {
   terminalClose: (termId: string) => invoke<void>("terminal_close", { termId }),
   localHome: () => invoke<string>("local_home"),
   localList: (path: string) => invoke<Entry[]>("local_list", { path }),
+  serverStatus: (sessionId: string) => invoke<ServerStatus>("server_status", { sessionId }),
+  tunnelStart: (sessionId: string, tunnelId: string) => invoke<TunnelState>("tunnel_start", { sessionId, tunnelId }),
+  tunnelStop: (sessionId: string, tunnelId: string) => invoke<void>("tunnel_stop", { sessionId, tunnelId }),
+  tunnelsList: (sessionId: string) => invoke<TunnelState[]>("tunnels_list", { sessionId }),
 };

@@ -345,6 +345,7 @@ impl KadeMcp {
             remote_path,
             local_path: blank_to_none(p.local_path),
             workspace,
+            tunnels: Vec::new(),
             updated_at: 0,
         };
         match profiles::upsert(profile) {

@@ -13,9 +13,11 @@ mod onepassword;
 mod profiles;
 mod remote;
 mod ssh;
+mod status;
 mod store;
 mod terminal;
 mod transfer;
+mod tunnel;
 mod update;
 mod watch;
 mod workspace;
@@ -127,20 +129,59 @@ async fn disconnect(
     sessions: State<'_, Sessions>,
     terminals: State<'_, Terminals>,
     edits: State<'_, edit::Edits>,
+    tunnels: State<'_, tunnel::Tunnels>,
     session_id: String,
 ) -> AppResult<()> {
     terminals.0.lock().unwrap().retain(|_, t| t.session_id != session_id);
     edits.stop_session(&session_id);
+    tunnels.stop_session(&session_id);
     let session = sessions.0.lock().unwrap().remove(&session_id);
     if let Some(session) = session {
         if let Some(fs) = &session.fs {
             fs.close().await;
         }
         if let Some(ssh) = &session.ssh {
-            let _ = ssh.disconnect(russh::Disconnect::ByApplication, "", "nl").await;
+            let _ = ssh.disconnect(russh::Disconnect::ByApplication, "", "en").await;
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn server_status(sessions: State<'_, Sessions>, session_id: String) -> AppResult<status::ServerStatus> {
+    status::fetch(&*sessions.get(&session_id)?).await
+}
+
+/// Start one of the connection's saved tunnels on this session.
+#[tauri::command]
+async fn tunnel_start(
+    app: AppHandle,
+    sessions: State<'_, Sessions>,
+    tunnels: State<'_, tunnel::Tunnels>,
+    session_id: String,
+    tunnel_id: String,
+) -> AppResult<tunnel::TunnelState> {
+    let session = sessions.get(&session_id)?;
+    let profile = profiles::get(&session.server_id)?;
+    let t = profile
+        .tunnels
+        .iter()
+        .find(|t| t.id == tunnel_id)
+        .ok_or_else(|| AppError::other(tr!("Tunnel not found", "Tunnel niet gevonden")))?;
+    let notify: tunnel::Notify = Arc::new(move |sid: &str| {
+        let _ = app.emit("tunnels-changed", sid);
+    });
+    tunnels.start(session, &session_id, t, notify).await
+}
+
+#[tauri::command]
+fn tunnel_stop(tunnels: State<'_, tunnel::Tunnels>, session_id: String, tunnel_id: String) {
+    tunnels.stop(&session_id, &tunnel_id);
+}
+
+#[tauri::command]
+fn tunnels_list(tunnels: State<'_, tunnel::Tunnels>, session_id: String) -> Vec<tunnel::TunnelState> {
+    tunnels.list(&session_id)
 }
 
 #[tauri::command]
@@ -502,6 +543,7 @@ pub fn run() {
         .manage(Arc::new(transfer::Transfers::default()))
         .manage(edit::Edits::default())
         .manage(mcp::McpServer::default())
+        .manage(tunnel::Tunnels::default())
         .setup(|app| {
             // A missing sync folder (e.g. an unmounted drive) must not stop the app.
             if let Err(e) = app.state::<watch::StoreWatcher>().restart(app.handle()) {
@@ -512,7 +554,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async {
                 let days = store::load().map(|d| d.settings.backup_retention_days).unwrap_or(7);
                 if let Err(e) = backup::purge(days, None).await {
-                    eprintln!("kade: oude backups opruimen mislukt: {e}");
+                    eprintln!("kade: cleaning up old backups failed: {e}");
                 }
             });
             Ok(())
@@ -532,6 +574,10 @@ pub fn run() {
             connect,
             disconnect,
             remote_list,
+            server_status,
+            tunnel_start,
+            tunnel_stop,
+            tunnels_list,
             terminal_open,
             terminal_write,
             terminal_resize,
