@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kade — SSH, SFTP and FTP for Linux and macOS</title>
+<meta name="description" content="Kade is a fast, friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Transmit. Two panes, a real terminal, tunnels and 1Password sign-in. Free and open source.">
+<meta name="theme-color" content="#07150F">
+<meta property="og:title" content="Kade — every server, one quay">
+<meta property="og:description" content="A fast, friendly SSH, SFTP and FTP manager for Linux and macOS. Free and open source.">
+<meta property="og:image" content="assets/main.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/kade.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --night:#07150F; --water:#0B2019; --line:rgba(233,241,238,.09); --line2:rgba(233,241,238,.16);
+  --pine:#1D6B57; --pine-hi:#2B8A70; --foam:#E9F1EE; --lichen:#93AAA2; --dim:#6E8A80;
+  --lamp:#F4B544; --lamp-soft:rgba(244,181,68,.14);
+  --gutter:16px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;background:var(--night)}
+body{background:var(--night);color:var(--foam);font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+img{max-width:100%}
+svg.i{width:1em;height:1em;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.serif{font-family:"Instrument Serif",serif;font-style:italic;font-weight:400;color:var(--lamp)}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--lamp);outline-offset:3px;border-radius:6px}
+.wrap{width:min(1200px,100% - 2*var(--gutter));margin:0 auto;position:relative}
+.eyebrow{font-family:"JetBrains Mono",monospace;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--lamp)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 24px;border-radius:12px;font-weight:600;font-size:16px;transition:transform .15s,background .15s,border-color .15s}
+.btn:hover{transform:translateY(-1px)}
+.btn .i{font-size:18px}
+.btn-lamp{background:var(--lamp);color:#1A1204;box-shadow:0 0 0 1px rgba(255,220,150,.4) inset,0 10px 40px -8px rgba(244,181,68,.55)}
+.btn-lamp:hover{background:#F7C463}
+.btn-ghost{border:1px solid var(--line2);color:var(--foam);background:rgba(233,241,238,.03)}
+.btn-ghost:hover{border-color:rgba(233,241,238,.32)}
+h2{font-weight:600;letter-spacing:-.045em}
+h2 .serif{letter-spacing:-.02em;font-size:1.09em}
+
+/* nav */
+nav{height:84px;display:flex;align-items:center;gap:40px;position:relative;z-index:5}
+.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:21px;letter-spacing:-.02em}
+.brand img{width:38px;height:38px;margin:-4px}
+.links{display:flex;gap:30px;font-size:15px;color:var(--lichen);margin-left:24px}
+.links a:hover,.fcols a:hover{color:var(--foam)}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:14px}
+.pill{font-family:"JetBrains Mono",monospace;font-size:12px;padding:6px 11px;border-radius:999px;border:1px solid var(--line2);color:var(--lichen);display:inline-flex;align-items:center;gap:8px}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--lamp);box-shadow:0 0 12px var(--lamp)}
+.nav-r .btn{height:40px;padding:0 16px;font-size:14px;border-radius:10px}
+
+/* hero */
+.hero{position:relative;overflow:hidden;padding-bottom:120px;
+  background:
+   radial-gradient(1100px 380px at 50% 78%, rgba(244,181,68,.20), transparent 70%),
+   radial-gradient(900px 520px at 50% 76%, rgba(43,138,112,.35), transparent 70%),
+   linear-gradient(180deg,#081A14 0%, #07150F 55%, #061210 100%)}
+.stars{position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(1px 1px at 12% 8%,rgba(233,241,238,.5),transparent),radial-gradient(1px 1px at 78% 6%,rgba(233,241,238,.4),transparent),radial-gradient(1px 1px at 64% 16%,rgba(233,241,238,.25),transparent),radial-gradient(1px 1px at 30% 20%,rgba(233,241,238,.3),transparent),radial-gradient(1.5px 1.5px at 88% 24%,rgba(244,181,68,.6),transparent),radial-gradient(1px 1px at 6% 28%,rgba(233,241,238,.3),transparent)}
+.hero-copy{text-align:center;padding-top:96px;position:relative;z-index:3}
+.hero h1{font-size:clamp(64px,11.7vw,168px);line-height:.86;letter-spacing:-.055em;font-weight:600;margin-top:28px}
+.hero h1 .serif{font-size:1.1em;letter-spacing:-.03em;padding-right:.05em}
+.lede{max-width:780px;margin:36px auto 0;font-size:clamp(17px,1.6vw,21px);line-height:1.5;color:var(--lichen)}
+.lede b{color:var(--foam);font-weight:500}
+.ctas{display:flex;justify-content:center;gap:14px;margin-top:40px;flex-wrap:wrap}
+.cmd{margin:26px auto 0;max-width:100%;display:inline-flex;align-items:center;gap:14px;padding:10px 10px 10px 18px;border-radius:12px;background:rgba(7,21,15,.7);border:1px solid var(--line2);font-family:"JetBrains Mono",monospace;font-size:14px;color:var(--lichen)}
+.cmd code{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:inherit}
+.cmd b{color:var(--lamp);font-weight:500}
+.cmd .tag{font-size:11px;padding:3px 8px;border-radius:6px;background:var(--lamp-soft);color:var(--lamp);flex:none}
+.copy{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:8px;border:0;background:transparent;color:var(--lichen);cursor:pointer;font-size:16px;flex:none}
+.copy:hover{background:rgba(233,241,238,.07);color:var(--foam)}
+.copy .ok{display:none;color:var(--lamp)}
+.copy.done .ok{display:block}.copy.done .cp{display:none}
+
+.stage{position:relative;z-index:2;width:min(1240px,100% - 2*var(--gutter));margin:96px auto 0;perspective:2200px}
+.window{border-radius:16px;overflow:hidden;transform:rotateX(14deg);transform-origin:50% 100%;
+  box-shadow:0 0 0 1px rgba(233,241,238,.14),0 60px 120px -20px rgba(0,0,0,.7),0 0 160px -30px rgba(244,181,68,.35)}
+.window img{display:block;width:100%;height:auto}
+.water{position:absolute;left:0;right:0;bottom:0;height:300px;z-index:3;pointer-events:none;background:linear-gradient(180deg,rgba(6,18,16,0) 0%,#061210 75%)}
+.ripples{position:absolute;left:0;right:0;bottom:40px;height:140px;z-index:4;opacity:.55;pointer-events:none;
+  background:repeating-linear-gradient(180deg,transparent 0 9px,rgba(244,181,68,.10) 9px 10px);
+  -webkit-mask-image:radial-gradient(520px 80px at 50% 30%,#000,transparent);mask-image:radial-gradient(520px 80px at 50% 30%,#000,transparent)}
+
+/* marquee */
+.strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#061210;height:76px;display:flex;align-items:center;overflow:hidden}
+.strip .row{display:flex;gap:44px;white-space:nowrap;font-family:"JetBrains Mono",monospace;font-size:13.5px;letter-spacing:.06em;color:var(--lichen);padding-left:44px;animation:drift 50s linear infinite}
+.strip .row span{display:inline-flex;align-items:center;gap:44px}
+.strip .row span::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--pine-hi)}
+.strip .row em{font-style:normal;color:var(--foam)}
+@keyframes drift{to{transform:translateX(-50%)}}
+
+/* features */
+.sec{padding-top:150px}
+.sec-head{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:end;margin-bottom:64px}
+.sec-head h2{font-size:clamp(44px,5.3vw,76px);line-height:.95;margin-top:20px}
+.sec-head p{font-size:19px;line-height:1.55;color:var(--lichen);max-width:500px}
+.bento{display:grid;grid-template-columns:repeat(12,1fr);gap:20px}
+.tile{position:relative;border-radius:22px;overflow:hidden;background:linear-gradient(180deg,#0E261E,#0A1D17);border:1px solid var(--line);min-height:560px}
+.tile .txt{padding:34px 36px 0;position:relative;z-index:2}
+.k{font-family:"JetBrains Mono",monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--lamp);display:flex;align-items:center;gap:10px}
+.k .i{font-size:16px}
+.tile h3{font-size:32px;letter-spacing:-.03em;line-height:1.08;font-weight:600;margin-top:14px}
+.tile p{font-size:16px;line-height:1.55;color:var(--lichen);margin-top:12px;max-width:440px}
+.tile p code{font-family:"JetBrains Mono",monospace;color:var(--foam);font-size:.92em}
+.shot{position:absolute;left:36px;right:-80px;bottom:-40px;border-radius:12px;overflow:hidden;z-index:2;box-shadow:0 0 0 1px rgba(233,241,238,.12),0 30px 80px -20px rgba(0,0,0,.8)}
+.shot img{display:block;width:100%;height:auto}
+.t7{grid-column:span 7}.t5{grid-column:span 5}
+.t5 .shot{right:-260px}
+.glow-lamp::before,.glow-pine::before{content:"";position:absolute;z-index:1}
+.glow-lamp::before{width:520px;height:320px;right:-120px;bottom:-60px;background:radial-gradient(closest-side,rgba(244,181,68,.22),transparent)}
+.glow-pine::before{width:620px;height:360px;left:-80px;bottom:-80px;background:radial-gradient(closest-side,rgba(43,138,112,.45),transparent)}
+.kbd{display:inline-flex;gap:6px;margin-left:6px;vertical-align:middle}
+.kbd b{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:500;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);border-bottom-width:2px;color:var(--foam)}
+
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);margin-top:20px;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:var(--line);gap:1px}
+.cell{padding:32px 30px 34px;background:#0A1C16}
+.cell .ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:rgba(43,138,112,.18);border:1px solid rgba(43,138,112,.35);font-size:21px}
+.cell .ic img{width:20px;height:20px;border-radius:5px}
+.cell h4{font-size:19px;font-weight:600;letter-spacing:-.015em;margin-top:22px}
+.cell p{font-size:14.5px;line-height:1.55;color:var(--lichen);margin-top:8px}
+.new{font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.1em;color:#1A1204;background:var(--lamp);padding:2px 6px;border-radius:5px;margin-left:8px;vertical-align:3px}
+
+/* switching */
+.switch{margin-top:150px;border-radius:28px;overflow:hidden;border:1px solid rgba(244,181,68,.22);
+  background:radial-gradient(700px 360px at 85% 50%,rgba(244,181,68,.16),transparent 70%),radial-gradient(600px 400px at 10% 100%,rgba(43,138,112,.30),transparent 70%),#0A1D17;
+  display:grid;grid-template-columns:1fr 520px;gap:40px;padding:72px 72px 72px 80px;align-items:center}
+.switch h2,.honest h2{font-size:clamp(42px,4.5vw,64px);line-height:.98;margin-top:20px}
+.switch p{font-size:18px;line-height:1.55;color:var(--lichen);margin-top:22px;max-width:480px}
+.note{display:flex;gap:10px;align-items:center;margin-top:28px;font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--foam)}
+.note .i{color:var(--lamp);font-size:16px}
+.dock{position:relative;height:340px;width:520px}
+.src{position:absolute;left:0;display:flex;align-items:center;gap:14px;height:64px;padding:0 22px 0 14px;border-radius:16px;background:rgba(7,21,15,.8);border:1px solid var(--line2);font-weight:600;font-size:17px;width:220px}
+.src img{width:32px;height:32px;border-radius:8px;background:#fff;padding:3px}
+.src small{display:block;font-family:"JetBrains Mono",monospace;font-weight:400;font-size:11.5px;color:var(--dim);margin-top:2px}
+.src:nth-of-type(1){top:20px}.src:nth-of-type(2){top:138px}.src:nth-of-type(3){top:256px}
+.dock svg{position:absolute;left:222px;top:0;width:176px;height:340px}
+.dock .rope{stroke-dasharray:2 7;animation:haul 1.4s linear infinite}
+@keyframes haul{to{stroke-dashoffset:-18}}
+.berth{position:absolute;right:0;top:110px;width:120px;height:120px;border-radius:30px;display:grid;place-items:center;background:rgba(244,181,68,.10);border:1px solid rgba(244,181,68,.35);box-shadow:0 0 80px -10px rgba(244,181,68,.45)}
+.berth img{width:118px;height:118px}
+
+/* plain dealing */
+.honest{display:grid;grid-template-columns:420px 1fr;gap:80px;margin-top:150px}
+.honest .lead{font-size:18px;line-height:1.55;color:var(--lichen);margin-top:22px}
+.ledger{border-top:1px solid var(--line2)}
+.ledger .r{display:grid;grid-template-columns:56px 1fr 1.2fr;gap:24px;align-items:baseline;padding:28px 0;border-bottom:1px solid var(--line)}
+.ledger .n{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--lamp)}
+.ledger h3{font-size:22px;font-weight:600;letter-spacing:-.02em}
+.ledger p{font-size:15.5px;line-height:1.55;color:var(--lichen)}
+.ledger code{font-family:"JetBrains Mono",monospace;font-size:13.5px;color:var(--foam);background:rgba(233,241,238,.06);padding:1px 6px;border-radius:5px}
+
+/* install */
+.install{margin-top:160px;text-align:center}
+.install h2{font-size:clamp(52px,6.7vw,96px);line-height:.92;margin-top:22px}
+.install .sub{font-size:19px;color:var(--lichen);margin-top:22px}
+.terms{display:grid;gap:20px;margin:56px auto 0;max-width:1060px;text-align:left}
+.term{border-radius:18px;overflow:hidden;background:#04100C;border:1px solid var(--line2);box-shadow:0 40px 100px -40px rgba(0,0,0,.9)}
+.term .bar{height:46px;display:flex;align-items:center;gap:12px;padding:0 8px 0 18px;border-bottom:1px solid var(--line);font-size:14px;font-weight:600}
+.dots{display:flex;gap:7px;margin-right:6px}.dots i{width:11px;height:11px;border-radius:50%;background:rgba(233,241,238,.14)}
+.term .bar .copy{margin-left:auto;width:auto;padding:0 10px;gap:7px;display:inline-flex;align-items:center;font-family:"JetBrains Mono",monospace;font-weight:400;font-size:12px}
+.term pre{font-family:"JetBrains Mono",monospace;font-size:14.5px;line-height:1.75;padding:22px 24px 26px;color:var(--lichen);overflow-x:auto}
+.term pre .p{color:var(--pine-hi)}.term pre .c{color:var(--foam)}.term pre .ok{color:var(--lamp)}
+.term .foot{padding:0 24px 22px;font-size:13.5px;color:var(--dim);line-height:1.5}
+
+/* footer */
+footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);background:radial-gradient(900px 300px at 50% 100%,rgba(244,181,68,.12),transparent 70%)}
+.fr{display:flex;align-items:flex-start;padding:56px 0 0;gap:60px}
+.def{max-width:380px}
+.def b{font-size:22px;font-weight:600;letter-spacing:-.02em}
+.ipa{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--dim);margin-left:8px}
+.def p{font-size:15.5px;color:var(--lichen);line-height:1.55;margin-top:10px}
+.fcols{margin-left:auto;display:flex;gap:72px;font-size:15px}
+.fcols div{display:flex;flex-direction:column;gap:12px;color:var(--lichen)}
+.fcols h4{font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:500;margin-bottom:4px}
+.giant{font-size:clamp(150px,30vw,430px);font-weight:700;letter-spacing:-.07em;line-height:.8;text-align:center;margin-top:60px;margin-bottom:-.16em;user-select:none;
+  color:transparent;-webkit-text-stroke:1.5px rgba(233,241,238,.14);background:linear-gradient(180deg,rgba(244,181,68,0) 30%,rgba(244,181,68,.22));-webkit-background-clip:text;background-clip:text}
+
+/* tablets */
+@media (max-width:1100px){
+  .pill{display:none}
+  .sec-head,.honest{grid-template-columns:1fr;gap:28px}
+  .t7,.t5{grid-column:span 12}
+  .t5 .shot{right:-80px}
+  .grid4{grid-template-columns:repeat(2,1fr)}
+  .switch{grid-template-columns:minmax(0,1fr);padding:56px 48px}
+  .dock{margin:0 auto}
+}
+/* phones */
+@media (max-width:700px){
+  .links{display:none}
+  nav{gap:16px}
+  .hero-copy{padding-top:56px}
+  .hero{padding-bottom:80px}
+  .cmd .tag{display:none}
+  .stage{margin-top:56px}
+  .window{transform:rotateX(8deg)}
+  .sec{padding-top:100px}
+  .sec-head{margin-bottom:40px}
+  .tile{min-height:0;padding-bottom:28px}
+  .tile .txt{padding:28px 24px 0}
+  .tile h3{font-size:26px}
+  .shot,.t5 .shot{position:relative;left:auto;right:auto;bottom:auto;margin:28px 0 0 24px;width:160%}
+  .grid4{grid-template-columns:1fr}
+  .switch{margin-top:100px;padding:44px 24px;grid-template-columns:minmax(0,1fr)}
+  .term pre{white-space:pre-wrap;word-break:break-all;font-size:13px}
+  .dock{transform:scale(.62);transform-origin:0 0;height:211px;margin:0}
+  .honest{margin-top:100px}
+  .ledger .r{grid-template-columns:40px 1fr;gap:6px 14px}
+  .ledger .r p{grid-column:2}
+  .install{margin-top:110px}
+  .fr{flex-direction:column;gap:40px}
+  .fcols{margin-left:0;gap:40px;flex-wrap:wrap}
+  footer{margin-top:110px}
+}
+@media (prefers-reduced-motion:reduce){.strip .row,.dock .rope{animation:none}.btn:hover{transform:none}}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="stars"></div>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#"><img src="assets/kade.svg" alt="">Kade</a>
+      <div class="links"><a href="#features">Features</a><a href="#import">Switching</a><a href="#install">Install</a><a href="https://github.com/jurnskie/kade#readme">Docs</a></div>
+      <div class="nav-r">
+        <a class="pill" href="https://github.com/jurnskie/kade/releases/latest"><i></i><span data-version>v0.6.1</span> · Import from Cyberduck, FileZilla, Transmit</a>
+        <a class="btn btn-ghost" href="https://github.com/jurnskie/kade"><svg class="i" viewBox="0 0 16 16" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
+      </div>
+    </nav>
+  </div>
+
+  <div class="hero-copy wrap">
+    <div class="eyebrow">SSH · SFTP · FTP · FTPS &nbsp;—&nbsp; for Linux &amp; macOS</div>
+    <h1>Every server,<br>one <span class="serif">quay.</span></h1>
+    <p class="lede"><b>Kade</b> is a fast, friendly file manager for your servers, in the spirit of Transmit. Two panes, a real terminal, tunnels and 1Password sign-in. <b>Free and open source.</b></p>
+    <div class="ctas">
+      <a class="btn btn-lamp" href="#install"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v16"/><path d="m19 13 2-1a9 9 0 0 1-18 0l2 1"/><path d="M9 11h6"/><circle cx="12" cy="4" r="2"/></svg>Install Kade</a>
+      <a class="btn btn-ghost" href="https://github.com/jurnskie/kade"><svg class="i" viewBox="0 0 16 16" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>Star on GitHub</a>
+    </div>
+    <div class="cmd" id="hero-cmd"><span class="tag" data-os-label>macOS</span><code><b>curl</b> -fsSL https://github.com/jurnskie/kade/releases/latest/download/<span data-os-script>install-macos.sh</span> | <b>bash</b></code><button class="copy" data-copy-hero aria-label="Copy install command"><span class="cp"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span></button></div>
+  </div>
+
+  <div class="stage"><div class="window"><img src="assets/main.png" width="2880" height="1760" alt="Kade with a local folder and a website on the server side by side"></div></div>
+  <div class="water"></div>
+  <div class="ripples"></div>
+</header>
+
+<div class="strip" aria-hidden="true"><div class="row">
+  <span><em>SFTP</em></span><span><em>SSH</em> terminal</span><span><em>FTP</em> &amp; <em>FTPS</em></span><span><em>1Password</em> SSH agent</span><span>Port <em>tunnels</em></span><span>Live <em>status</em></span><span><em>Backups</em> of every delete</span><span><em>MCP</em> for AI assistants</span><span>English · <em>Nederlands</em></span><span><em>MIT</em> licensed</span>
+  <span><em>SFTP</em></span><span><em>SSH</em> terminal</span><span><em>FTP</em> &amp; <em>FTPS</em></span><span><em>1Password</em> SSH agent</span><span>Port <em>tunnels</em></span><span>Live <em>status</em></span><span><em>Backups</em> of every delete</span><span><em>MCP</em> for AI assistants</span><span>English · <em>Nederlands</em></span><span><em>MIT</em> licensed</span>
+</div></div>
+
+<main>
+<section class="sec" id="features"><div class="wrap">
+  <div class="sec-head">
+    <div><div class="eyebrow">What's on board</div><h2>Built for people who live on <span class="serif">servers.</span></h2></div>
+    <p>Kade is a native desktop app in Rust and Tauri. It opens in a blink, keeps your connections in one plain file, and never stores a password.</p>
+  </div>
+  <div class="bento">
+    <article class="tile t7 glow-pine">
+      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1z"/><path d="M17 21v-2"/><path d="M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10"/><path d="M21 21v-2"/><path d="M3 5V3"/><path d="M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2z"/><path d="M7 5V3"/></svg>Tunnels</div>
+      <h3>Reach the database that only listens on localhost.</h3>
+      <p>Forward ports like <code>ssh -L</code>, saved with the connection and started when you connect.</p></div>
+      <div class="shot"><img src="assets/tunnels-dark.png" width="2880" height="1760" loading="lazy" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"></div>
+    </article>
+    <article class="tile t5 glow-lamp">
+      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>Status</div>
+      <h3>Know how the box is doing.</h3>
+      <p>CPU, memory, disks and the busiest processes, live, over the same SSH connection.</p></div>
+      <div class="shot"><img src="assets/status.png" width="2880" height="1760" loading="lazy" alt="Server status with CPU, memory, disks and processes"></div>
+    </article>
+    <article class="tile t5 glow-lamp">
+      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>Backups</div>
+      <h3>Undo, for your servers.</h3>
+      <p>Everything Kade deletes or overwrites is kept for a week. One click puts it back.</p></div>
+      <div class="shot"><img src="assets/backups.png" width="2880" height="1760" loading="lazy" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"></div>
+    </article>
+    <article class="tile t7 glow-pine">
+      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>Quick open</div>
+      <h3>Any server, two keys away. <span class="kbd"><b>Ctrl</b><b>K</b></span></h3>
+      <p>Search every connection across your Home and Work workspaces, and jump straight in.</p></div>
+      <div class="shot"><img src="assets/switcher.png" width="2880" height="1760" loading="lazy" alt="Quick open: find any connection with Ctrl K"></div>
+    </article>
+  </div>
+
+  <div class="grid4">
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg></div><h4>Two panes</h4><p>This computer on the left, the server on the right. Drag between them.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg></div><h4>A real terminal</h4><p>Ctrl ` flips to a full xterm on the same SSH connection.</p></div>
+    <div class="cell"><div class="ic"><img src="assets/logos/1password.com.ico" alt=""></div><h4>1Password sign-in</h4><p>Use the 1Password SSH agent, ssh-agent, a key file or a password you type.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.364 13.634a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506l4.013-4.009a1 1 0 0 0-3.004-3.004z"/><path d="M14.487 7.858A1 1 0 0 1 14 7V2"/><path d="M20 19.645V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l2.516 2.516"/><path d="M8 18h1"/></svg></div><h4>Edit in your editor</h4><p>Double-click a server file. Every save is uploaded, with a backup of the last one.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v.5"/><path d="M12 10v4h4"/><path d="m12 14 1.535-1.605a5 5 0 0 1 8 1.5"/><path d="M22 22v-4h-4"/><path d="m22 18-1.535 1.605a5 5 0 0 1-8-1.5"/></svg></div><h4>Sync via a folder</h4><p>Point Kade at Syncthing, iCloud Drive or Synology Drive. Your laptop catches up.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></div><h4>MCP server</h4><p>Let Claude Code add, test and open connections. Off by default, local only.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></div><h4>Updates in the app</h4><p>One click in Settings fetches the latest release from GitHub.</p></div>
+    <div class="cell"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4"/></svg></div><h4>Import <span class="new">NEW</span></h4><p>Bring your bookmarks from Cyberduck, FileZilla and Transmit.</p></div>
+  </div>
+</div></section>
+
+<section class="wrap" id="import"><div class="switch">
+  <div>
+    <div class="eyebrow">Switching is one click</div>
+    <h2>Bring your bookmarks.<br>Leave the <span class="serif">baggage.</span></h2>
+    <p>Kade finds your Cyberduck bookmarks and FileZilla Site Manager by itself, and reads a Transmit export. Folders become groups, key files come along, duplicates are left unticked.</p>
+    <div class="note"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="16" r="1"/><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/></svg>Passwords stay behind. Kade asks when you connect.</div>
+  </div>
+  <div class="dock" aria-label="Cyberduck, FileZilla and Transmit bookmarks flow into Kade">
+    <div class="src"><img src="assets/logos/cyberduck.io.ico" alt=""><div>Cyberduck<small>Bookmarks/*.duck</small></div></div>
+    <div class="src"><img src="assets/logos/filezilla-project.org.ico" alt=""><div>FileZilla<small>sitemanager.xml</small></div></div>
+    <div class="src"><img src="assets/logos/panic.com.ico" alt=""><div>Transmit<small>.transmitServers</small></div></div>
+    <svg viewBox="0 0 200 340" fill="none" preserveAspectRatio="none" aria-hidden="true">
+      <defs><linearGradient id="rope" x1="0" x2="1"><stop offset="0" stop-color="#E9F1EE" stop-opacity=".18"/><stop offset="1" stop-color="#F4B544" stop-opacity=".9"/></linearGradient></defs>
+      <path class="rope" d="M0 52 C 90 52, 100 170, 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <path class="rope" d="M0 170 L 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <path class="rope" d="M0 288 C 90 288, 100 170, 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="190" cy="170" r="4" fill="#F4B544"/>
+    </svg>
+    <div class="berth"><img src="assets/kade.svg" alt=""></div>
+  </div>
+</div></section>
+
+<section class="wrap honest">
+  <div>
+    <div class="eyebrow">Plain dealing</div>
+    <h2>Your keys stay <span class="serif">yours.</span></h2>
+    <p class="lead">No account, no cloud, no tracking. Kade talks to your servers, and to GitHub to check for updates. That's it.</p>
+  </div>
+  <div class="ledger">
+    <div class="r"><span class="n">01</span><h3>Passwords are never stored</h3><p>Typed at connect time, or read from 1Password through <code>op</code> when you need them.</p></div>
+    <div class="r"><span class="n">02</span><h3>Host keys are checked</h3><p>Against your own <code>~/.ssh/known_hosts</code>, with the fingerprint shown before you trust a new server.</p></div>
+    <div class="r"><span class="n">03</span><h3>One plain file</h3><p>Connections live in <code>kade.json</code>. Sync it, back it up, read it. Deletes win over stale copies.</p></div>
+    <div class="r"><span class="n">04</span><h3>Open source, MIT</h3><p>Every line is on GitHub. Build it yourself with <code>pnpm tauri build</code>.</p></div>
+  </div>
+</section>
+
+<section class="wrap install" id="install">
+  <div class="eyebrow">Free · MIT · Linux &amp; macOS</div>
+  <h2>Cast off in<br><span class="serif">ten seconds.</span></h2>
+  <p class="sub">One line installs or updates Kade. The script checks the checksum before it touches anything.</p>
+  <div class="terms">
+    <div class="term">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span>macOS<button class="copy" data-copy="curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-macos.sh | bash"><span class="cp"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>Copy</button></div>
+      <pre><span class="p">~ $</span> <span class="c">curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-macos.sh | bash</span>
+<span class="ok">✓</span> Kade installed in /Applications</pre>
+      <div class="foot">Universal build for Apple Silicon and Intel.</div>
+    </div>
+    <div class="term">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span>Linux<button class="copy" data-copy="curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-linux.sh | bash"><span class="cp"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>Copy</button></div>
+      <pre><span class="p">~ $</span> <span class="c">curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-linux.sh | bash</span>
+<span class="ok">✓</span> Kade installed in ~/.local/bin</pre>
+      <div class="foot">AppImage for any distro, or a <a href="https://github.com/jurnskie/kade/releases/latest" style="color:var(--lichen);text-decoration:underline">.deb from the releases page</a>.</div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap">
+  <div class="fr">
+    <div class="def"><b>kade</b><span class="ipa">/ˈkaː.də/ · Dutch, noun</span><p>A quay: the stone edge of a harbour where ships tie up to load and unload. Here, it's where your files come ashore.</p></div>
+    <div class="fcols">
+      <div><h4>Product</h4><a href="#features">Features</a><a href="#import">Switching</a><a href="#install">Install</a></div>
+      <div><h4>Project</h4><a href="https://github.com/jurnskie/kade">GitHub</a><a href="https://github.com/jurnskie/kade/releases">Releases</a><a href="https://github.com/jurnskie/kade/blob/master/CONTRIBUTING.md">Contributing</a></div>
+      <div><h4>Made by</h4><a href="https://github.com/jurnskie">Jurn Spijksma</a><a href="https://github.com/jurnskie/kade/blob/master/LICENSE">MIT license</a></div>
+    </div>
+  </div>
+  <div class="giant" aria-hidden="true">Kade</div>
+</div></footer>
+
+<script>
+// Show the Linux command to Linux visitors; macOS otherwise.
+const linux = /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+if (linux) {
+  document.querySelector("[data-os-label]").textContent = "Linux";
+  document.querySelector("[data-os-script]").textContent = "install-linux.sh";
+}
+function copied(btn, text) {
+  navigator.clipboard?.writeText(text).then(() => {
+    btn.classList.add("done");
+    setTimeout(() => btn.classList.remove("done"), 1600);
+  });
+}
+document.querySelector("[data-copy-hero]").addEventListener("click", (e) => copied(e.currentTarget, document.querySelector("#hero-cmd code").textContent.trim()));
+document.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", () => copied(b, b.dataset.copy)));
+// Latest version from GitHub; the hard-coded one is the fallback.
+fetch("https://api.github.com/repos/jurnskie/kade/releases/latest")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((r) => r?.tag_name && document.querySelectorAll("[data-version]").forEach((el) => (el.textContent = r.tag_name)))
+  .catch(() => {});
+</script>
+</body>
+</html>

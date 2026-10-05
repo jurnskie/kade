@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Kade app icon. Regenerate all sizes with: pnpm tauri icon src-tauri/icons/source/kade.png -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b8a70"/>
+      <stop offset="1" stop-color="#17594a"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#0b2a22" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glyph" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0b2a22" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <!-- macOS grid: 824px rounded square centred on a 1024 canvas -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
+  <!-- Lucide "anchor", as used in the app's sidebar -->
+  <g filter="url(#glyph)" transform="translate(248 248) scale(22)" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 6v16"/>
+    <path d="m19 13 2-1a9 9 0 0 1-18 0l2 1"/>
+    <path d="M9 11h6"/>
+    <circle cx="12" cy="4" r="2"/>
+  </g>
+</svg>
