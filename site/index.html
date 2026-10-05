@@ -218,8 +218,103 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
 }
 @media (prefers-reduced-motion:reduce){.strip .row,.dock .rope{animation:none}.btn:hover{transform:none}}
 </style>
+<style>
+/* ---------- statement ---------- */
+.statement{padding-top:150px}
+.statement p{font-size:clamp(30px,4.2vw,60px);line-height:1.12;letter-spacing:-.035em;font-weight:600;max-width:1100px}
+.statement .lamp{color:var(--lamp)}
+.statement .w{display:inline}
+
+/* ---------- feature tour (static: a simple list) ---------- */
+.tour{margin-bottom:20px}
+.tour-pin{display:grid;gap:28px}
+.tour-copy{display:grid;gap:44px 64px;grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:700px){.tour-copy{grid-template-columns:1fr}}
+.ch-txt h3{font-size:clamp(26px,2.6vw,36px);letter-spacing:-.035em;line-height:1.05;font-weight:600;margin-top:14px}
+.ch-txt p{font-size:17px;line-height:1.55;color:var(--lichen);margin-top:14px;max-width:440px}
+.ch-txt p code{font-family:"JetBrains Mono",monospace;color:var(--foam);font-size:.92em}
+.ch-n{display:none}
+.device{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ch-img{border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px rgba(233,241,238,.14),0 40px 100px -30px rgba(0,0,0,.8)}
+.ch-img img{display:block;width:100%;height:auto}
+.tour-progress{display:none}
+
+/* ---------- glass mini nav ---------- */
+.mini{position:fixed;top:0;left:0;right:0;z-index:50;height:56px;display:flex;align-items:center;
+  background:rgba(7,21,15,.62);backdrop-filter:saturate(1.6) blur(18px);-webkit-backdrop-filter:saturate(1.6) blur(18px);
+  border-bottom:1px solid var(--line);transform:translateY(-100%);transition:transform .45s cubic-bezier(.2,.8,.2,1)}
+.mini.on{transform:none}
+.mini .wrap{display:flex;align-items:center;gap:28px}
+.mini .brand{font-size:17px}.mini .brand img{width:30px;height:30px}
+.mini-links{display:flex;gap:24px;font-size:14px;color:var(--lichen)}
+.mini .btn{margin-left:auto;height:34px;padding:0 16px;font-size:13.5px;border-radius:999px}
+
+/* ---------- motion layer (added by JS) ---------- */
+.motion .hero{height:100vh;min-height:680px;padding-bottom:0}
+.motion .stage{position:absolute;left:0;right:0;margin:0 auto;top:var(--stage-top,62%)}
+.motion .window{transform:none;will-change:transform}
+.motion .hero .lede,.motion .hero .ctas,.motion .hero .cmd,.motion .hero h1,.motion .hero .eyebrow{will-change:transform,opacity}
+.motion .statement .w{opacity:.14;transition:none}
+
+.motion .tour{margin-bottom:0;overflow-x:clip}
+.motion .tour-pin{position:relative;height:100vh;min-height:640px;display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:56px;align-items:center}
+.motion .tour-copy{position:relative;display:block;height:340px}
+.motion .ch-txt{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;opacity:0}
+.motion .ch-txt[data-ch="0"]{opacity:1}
+.motion .ch-n{display:block;font-size:12px;color:var(--dim);margin-top:18px;letter-spacing:.08em}
+.motion .tour-device{perspective:1800px}
+.motion .device{display:block;position:relative;aspect-ratio:2880/1760;border-radius:16px;transform-style:preserve-3d;
+  box-shadow:0 0 0 1px rgba(233,241,238,.16),0 80px 140px -40px rgba(0,0,0,.85),0 0 180px -40px rgba(244,181,68,.35)}
+.motion .ch-img{position:absolute;inset:0;box-shadow:none;border-radius:16px;clip-path:inset(0 0 0 100% round 16px)}
+.motion .ch-img[data-ch="0"]{clip-path:inset(0 0 0 0 round 16px)}
+.motion .tour-progress{display:flex;gap:8px;position:absolute;left:0;bottom:56px}
+.motion .tour-progress i{width:44px;height:3px;border-radius:2px;background:rgba(233,241,238,.14);overflow:hidden}
+.motion .tour-progress b{display:block;height:100%;width:100%;background:var(--lamp);transform:scaleX(0);transform-origin:0 50%}
+
+.motion .reveal{opacity:0;transform:translateY(48px)}
+.motion .giant{will-change:transform}
+
+@media (max-width:900px){
+  .motion .tour-pin{grid-template-columns:1fr;grid-template-rows:auto auto;align-content:center;gap:28px}
+  .motion .tour-copy{height:230px}
+  .motion .tour-progress{position:static;justify-content:center}
+}
+@media (max-width:700px){
+  .device{grid-template-columns:1fr}
+  .statement{padding-top:100px}
+  .mini-links{display:none}
+  .motion .tour-copy{height:250px}
+  .motion .ch-txt h3{font-size:26px}
+  .motion .ch-txt p{font-size:15px}
+}
+
+/* ---------- boats ---------- */
+.dock svg{overflow:visible;width:180px;left:220px}
+.boat .wake{opacity:0}
+.bob{animation:bob 3.4s ease-in-out infinite;transform-box:fill-box;transform-origin:50% 90%}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-2.5deg)}50%{transform:translateY(-1.6px) rotate(2.5deg)}}
+footer{position:relative}
+.harbour{position:absolute;left:0;right:0;bottom:0;height:96px;pointer-events:none;
+  background:repeating-linear-gradient(180deg,transparent 0 7px,rgba(244,181,68,.07) 7px 8px);
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 40%);mask-image:linear-gradient(180deg,transparent,#000 40%)}
+.h-boat{position:absolute;bottom:34px;width:46px;height:40px;overflow:visible}
+.h-boat .bob{animation-delay:var(--d,0s)}
+.h-boat.flip{transform:scaleX(-1)}
+.h-boat.drift{left:-60px;bottom:46px;width:34px;height:30px;opacity:.75;animation:drift-by 70s linear infinite}
+@keyframes drift-by{from{transform:translateX(0)}to{transform:translateX(calc(100vw + 120px))}}
+@media (max-width:700px){.h-boat{width:32px;height:28px;bottom:14px}}
+@media (prefers-reduced-motion:reduce){.bob,.h-boat.drift{animation:none}}
+.motion .hero nav{position:relative;z-index:6}
+</style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="boat" viewBox="-16 -17 32 26" overflow="visible">
+  <path d="M-15 0 H15 L10 7 H-11 Z" fill="#E9F1EE"/><path d="M-11 4 H11" stroke="#07150F" stroke-opacity=".35" stroke-width="1"/>
+  <path d="M0 0 V-16" stroke="#E9F1EE" stroke-width="1.3" stroke-linecap="round"/>
+  <path d="M1.2 -15 L12 -1.5 H1.2 Z" style="fill:var(--sail)"/><path d="M-1.2 -12 L-10 -1.5 H-1.2 Z" style="fill:var(--sail)" opacity=".55"/>
+  <path d="M0 -16 L5 -18.5 L0 -20" style="fill:var(--sail)"/>
+</symbol></svg>
+<div class="mini" aria-hidden="true"><div class="wrap"><a class="brand" href="#" tabindex="-1"><img src="assets/kade.svg" alt="">Kade</a><span class="mini-links"><a href="#features" tabindex="-1">Features</a><a href="#import" tabindex="-1">Switching</a></span><a class="btn btn-lamp" href="#install" tabindex="-1">Install</a></div></div>
 
 <header class="hero">
   <div class="stars"></div>
@@ -256,36 +351,33 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
 </div></div>
 
 <main>
+<section class="wrap statement" aria-label="About Kade">
+  <p data-words>Kade opens in a blink. Two panes, a real terminal and every server you look after, moored in one quiet place. No account. No cloud. <span class="lamp">No password ever written to disk.</span></p>
+</section>
+
 <section class="sec" id="features"><div class="wrap">
   <div class="sec-head">
     <div><div class="eyebrow">What's on board</div><h2>Built for people who live on <span class="serif">servers.</span></h2></div>
     <p>Kade is a native desktop app in Rust and Tauri. It opens in a blink, keeps your connections in one plain file, and never stores a password.</p>
   </div>
-  <div class="bento">
-    <article class="tile t7 glow-pine">
-      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1z"/><path d="M17 21v-2"/><path d="M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10"/><path d="M21 21v-2"/><path d="M3 5V3"/><path d="M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2z"/><path d="M7 5V3"/></svg>Tunnels</div>
-      <h3>Reach the database that only listens on localhost.</h3>
-      <p>Forward ports like <code>ssh -L</code>, saved with the connection and started when you connect.</p></div>
-      <div class="shot"><img src="assets/tunnels-dark.png" width="2880" height="1760" loading="lazy" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"></div>
-    </article>
-    <article class="tile t5 glow-lamp">
-      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>Status</div>
-      <h3>Know how the box is doing.</h3>
-      <p>CPU, memory, disks and the busiest processes, live, over the same SSH connection.</p></div>
-      <div class="shot"><img src="assets/status.png" width="2880" height="1760" loading="lazy" alt="Server status with CPU, memory, disks and processes"></div>
-    </article>
-    <article class="tile t5 glow-lamp">
-      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>Backups</div>
-      <h3>Undo, for your servers.</h3>
-      <p>Everything Kade deletes or overwrites is kept for a week. One click puts it back.</p></div>
-      <div class="shot"><img src="assets/backups.png" width="2880" height="1760" loading="lazy" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"></div>
-    </article>
-    <article class="tile t7 glow-pine">
-      <div class="txt"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>Quick open</div>
-      <h3>Any server, two keys away. <span class="kbd"><b>Ctrl</b><b>K</b></span></h3>
-      <p>Search every connection across your Home and Work workspaces, and jump straight in.</p></div>
-      <div class="shot"><img src="assets/switcher.png" width="2880" height="1760" loading="lazy" alt="Quick open: find any connection with Ctrl K"></div>
-    </article>
+  <div class="tour">
+    <div class="tour-pin">
+      <div class="tour-copy">
+      <div class="ch-txt" data-ch="0"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/></svg>Two panes</div><span class="ch-n mono">01 / 05</span><h3>Your laptop on the left. The server on the right.</h3><p>Drag files across, edit them in place, and every delete or overwrite lands in Backups first.</p></div>
+      <div class="ch-txt" data-ch="1"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1z"/><path d="M17 21v-2"/><path d="M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10"/><path d="M21 21v-2"/><path d="M3 5V3"/><path d="M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2z"/><path d="M7 5V3"/></svg>Tunnels</div><span class="ch-n mono">02 / 05</span><h3>Reach the database that only listens on localhost.</h3><p>Forward ports like <code>ssh -L</code>, saved with the connection and started when you connect.</p></div>
+      <div class="ch-txt" data-ch="2"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>Status</div><span class="ch-n mono">03 / 05</span><h3>Know how the box is doing.</h3><p>CPU, memory, disks and the busiest processes, live, over the same SSH connection.</p></div>
+      <div class="ch-txt" data-ch="3"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>Backups</div><span class="ch-n mono">04 / 05</span><h3>Undo, for your servers.</h3><p>Everything Kade deletes or overwrites is kept for a week. One click puts it back.</p></div>
+      <div class="ch-txt" data-ch="4"><div class="k"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>Quick open</div><span class="ch-n mono">05 / 05</span><h3>Any server, two keys away. <span class="kbd"><b>Ctrl</b><b>K</b></span></h3><p>Search every connection across your Home and Work workspaces, and jump straight in.</p></div>
+      </div>
+      <div class="tour-device"><div class="device">
+        <div class="ch-img" data-ch="0"><img src="assets/main.png" width="2880" height="1760" alt="Kade with a local folder and a website on the server side by side"></div>
+        <div class="ch-img" data-ch="1"><img src="assets/tunnels-dark.png" width="2880" height="1760" alt="Tunnels to MySQL, Redis and Grafana, in dark mode"></div>
+        <div class="ch-img" data-ch="2"><img src="assets/status.png" width="2880" height="1760" alt="Server status with CPU, memory, disks and processes"></div>
+        <div class="ch-img" data-ch="3"><img src="assets/backups.png" width="2880" height="1760" alt="Backups of everything Kade deleted or overwrote, with Restore buttons"></div>
+        <div class="ch-img" data-ch="4"><img src="assets/switcher.png" width="2880" height="1760" alt="Quick open: find any connection with Ctrl K"></div>
+      </div></div>
+      <div class="tour-progress" aria-hidden="true"><i><b></b></i><i><b></b></i><i><b></b></i><i><b></b></i><i><b></b></i></div>
+    </div>
   </div>
 
   <div class="grid4">
@@ -311,12 +403,14 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
     <div class="src"><img src="assets/logos/cyberduck.io.ico" alt=""><div>Cyberduck<small>Bookmarks/*.duck</small></div></div>
     <div class="src"><img src="assets/logos/filezilla-project.org.ico" alt=""><div>FileZilla<small>sitemanager.xml</small></div></div>
     <div class="src"><img src="assets/logos/panic.com.ico" alt=""><div>Transmit<small>.transmitServers</small></div></div>
-    <svg viewBox="0 0 200 340" fill="none" preserveAspectRatio="none" aria-hidden="true">
+    <svg viewBox="0 0 180 340" fill="none" aria-hidden="true">
       <defs><linearGradient id="rope" x1="0" x2="1"><stop offset="0" stop-color="#E9F1EE" stop-opacity=".18"/><stop offset="1" stop-color="#F4B544" stop-opacity=".9"/></linearGradient></defs>
-      <path class="rope" d="M0 52 C 90 52, 100 170, 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
-      <path class="rope" d="M0 170 L 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
-      <path class="rope" d="M0 288 C 90 288, 100 170, 190 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
-      <circle cx="190" cy="170" r="4" fill="#F4B544"/>
+      <path class="rope" id="route-1" d="M0 52 C 80 52, 80 132, 160 132 L 178 132" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <path class="rope" id="route-2" d="M0 170 L 178 170" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <path class="rope" id="route-3" d="M0 288 C 80 288, 80 208, 160 208 L 178 208" stroke="url(#rope)" stroke-width="2" stroke-linecap="round"/>
+      <g class="boat" data-route="#route-1" transform="translate(161 128)" style="--sail:#F2C230"><g class="bob" style="animation-delay:0s"><path class="wake" d="M-20 4 H-13 M-23 6.5 H-14" stroke="#E9F1EE" stroke-opacity=".35" stroke-width="1" stroke-linecap="round"/><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></g>
+      <g class="boat" data-route="#route-2" transform="translate(161 166)" style="--sail:#D9453E"><g class="bob" style="animation-delay:-1.1s"><path class="wake" d="M-20 4 H-13 M-23 6.5 H-14" stroke="#E9F1EE" stroke-opacity=".35" stroke-width="1" stroke-linecap="round"/><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></g>
+      <g class="boat" data-route="#route-3" transform="translate(161 204)" style="--sail:#4AA3E0"><g class="bob" style="animation-delay:-2.2s"><path class="wake" d="M-20 4 H-13 M-23 6.5 H-14" stroke="#E9F1EE" stroke-opacity=".35" stroke-width="1" stroke-linecap="round"/><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></g>
     </svg>
     <div class="berth"><img src="assets/kade.svg" alt=""></div>
   </div>
@@ -344,13 +438,13 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
     <div class="term">
       <div class="bar"><span class="dots"><i></i><i></i><i></i></span>macOS<button class="copy" data-copy="curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-macos.sh | bash"><span class="cp"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>Copy</button></div>
       <pre><span class="p">~ $</span> <span class="c">curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-macos.sh | bash</span>
-<span class="ok">✓</span> Kade installed in /Applications</pre>
+<span class="done"><span class="ok">✓</span> Kade installed in /Applications</span></pre>
       <div class="foot">Universal build for Apple Silicon and Intel.</div>
     </div>
     <div class="term">
       <div class="bar"><span class="dots"><i></i><i></i><i></i></span>Linux<button class="copy" data-copy="curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-linux.sh | bash"><span class="cp"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span><span class="ok"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>Copy</button></div>
       <pre><span class="p">~ $</span> <span class="c">curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-linux.sh | bash</span>
-<span class="ok">✓</span> Kade installed in ~/.local/bin</pre>
+<span class="done"><span class="ok">✓</span> Kade installed in ~/.local/bin</span></pre>
       <div class="foot">AppImage for any distro, or a <a href="https://github.com/jurnskie/kade/releases/latest" style="color:var(--lichen);text-decoration:underline">.deb from the releases page</a>.</div>
     </div>
   </div>
@@ -367,7 +461,15 @@ footer{margin-top:170px;overflow:hidden;border-top:1px solid var(--line);backgro
     </div>
   </div>
   <div class="giant" aria-hidden="true">Kade</div>
-</div></footer>
+</div>
+  <div class="harbour" aria-hidden="true">
+    <svg class="h-boat" style="left:9%;--sail:#F4B544;--d:-.4s" viewBox="-15 -15 30 24"><g class="bob"><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></svg>
+    <svg class="h-boat" style="left:27%;--sail:#2B8A70;--d:-1.6s" viewBox="-15 -15 30 24"><g class="bob"><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></svg>
+    <svg class="h-boat flip" style="left:61%;--sail:#E9F1EE;--d:-2.3s" viewBox="-15 -15 30 24"><g class="bob"><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></svg>
+    <svg class="h-boat" style="left:83%;--sail:#F4B544;--d:-.9s" viewBox="-15 -15 30 24"><g class="bob"><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></svg>
+    <svg class="h-boat drift" style="--sail:#93AAA2" viewBox="-15 -15 30 24"><g class="bob"><use href="#boat" x="-12" y="-12.75" width="24" height="19.5"/></g></svg>
+  </div>
+</footer>
 
 <script>
 // Show the Linux command to Linux visitors; macOS otherwise.
@@ -390,5 +492,9 @@ fetch("https://api.github.com/repos/jurnskie/kade/releases/latest")
   .then((r) => r?.tag_name && document.querySelectorAll("[data-version]").forEach((el) => (el.textContent = r.tag_name)))
   .catch(() => {});
 </script>
+<script src="assets/js/gsap.min.js" defer></script>
+<script src="assets/js/ScrollTrigger.min.js" defer></script>
+<script src="assets/js/MotionPathPlugin.min.js" defer></script>
+<script src="assets/js/motion.js" defer></script>
 </body>
 </html>
