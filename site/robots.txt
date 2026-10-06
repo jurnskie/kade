@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kade.dev.jurnspijksma.nl/sitemap.xml

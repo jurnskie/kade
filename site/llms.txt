@@ -1,0 +1,22 @@
+# Kade
+
+> Kade is a free, open-source (MIT) SSH, SFTP, FTP and FTPS client for Linux and macOS, in the spirit of Transmit. It is a native desktop app built with Rust and Tauri.
+
+Key facts:
+
+- Platforms: macOS (universal build for Apple Silicon and Intel) and Linux (AppImage, .deb). Not available for Windows.
+- Protocols: SFTP, SSH, FTP, FTPS (explicit TLS on port 21, implicit TLS on port 990).
+- Two panes (local and server) with drag and drop, a built-in SSH terminal (xterm.js), SSH port tunnels (local forwards like `ssh -L`), live server status (CPU, memory, disks, processes) and editing server files in your own editor.
+- Backups of everything Kade deletes or overwrites, restorable with one click.
+- Sign-in: 1Password SSH agent, ssh-agent, a key file, a password from 1Password via the `op` CLI, or a typed password. Passwords are never stored. Host keys are checked against `~/.ssh/known_hosts`.
+- Import: `~/.ssh/config`, Cyberduck bookmarks, FileZilla Site Manager and Transmit exports.
+- Workspaces (for example Home and Work), sync between computers through a folder (Syncthing, iCloud Drive, Synology Drive), an optional built-in MCP server for AI assistants, in-app updates, light and dark mode, English and Dutch.
+- No account, no cloud service and no telemetry.
+
+## Links
+
+- [Website](https://kade.dev.jurnspijksma.nl/)
+- [Source code and README](https://github.com/jurnskie/kade)
+- [Latest release and downloads](https://github.com/jurnskie/kade/releases/latest)
+- Install on macOS: `curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-macos.sh | bash`
+- Install on Linux: `curl -fsSL https://github.com/jurnskie/kade/releases/latest/download/install-linux.sh | bash`

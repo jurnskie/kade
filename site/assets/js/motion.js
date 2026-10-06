@@ -141,6 +141,18 @@
       .to(bars, { scaleX: (j) => (j <= to ? 1 : 0), duration: 0.6, ease: "power2.out", stagger: 0.04 }, 0);
   };
 
+  // Jumps the reader asks for (in-page links, Home/End) pass the gate.
+  let jumping = false;
+  let jumpTimer;
+  const jump = () => {
+    jumping = true;
+    clearTimeout(jumpTimer);
+    jumpTimer = setTimeout(() => (jumping = false), 2500);
+  };
+  addEventListener("click", (e) => e.target.closest?.('a[href^="#"]') && jump(), true);
+  addEventListener("keydown", (e) => (e.key === "Home" || e.key === "End") && jump());
+  addEventListener("scrollend", () => jumping && setTimeout(() => (jumping = false), 50));
+
   const pinned = ScrollTrigger.create({
     trigger: ".tour-pin",
     start: "top top",
@@ -149,7 +161,7 @@
     anticipatePin: 1,
     snap: { snapTo: 1 / (n - 1), duration: { min: 0.2, max: 0.5 }, delay: 0.1, ease: "power1.inOut" },
     onUpdate: (self) => {
-      if (busy) {
+      if (busy && !jumping) {
         // The gate: while a chapter is still coming in, the page can't run
         // more than half a chapter past it, so a hard flick can't skip the
         // tour. Before the first and after the last chapter it stays open.
@@ -196,7 +208,7 @@
 
   /* ---------- 5. Headings, rows and cards rise into place ---------- */
   const reveal = $$(
-    ".sec-head > div, .sec-head > p, .grid4 .cell, .switch > div:first-child, .honest > div:first-child, .ledger .r, .install > .eyebrow, .install h2, .install .sub, .term, .fr",
+    ".sec-head > div, .sec-head > p, .grid4 .cell, .switch > div:first-child, .honest > div:first-child, .ledger .r, .faq > .eyebrow, .faq h2, .qa, .install > .eyebrow, .install h2, .install .sub, .term, .fr",
   );
   reveal.forEach((el) => el.classList.add("reveal"));
   ScrollTrigger.batch(reveal, {
