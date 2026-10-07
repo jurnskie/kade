@@ -1,11 +1,15 @@
 <script lang="ts">
   import { ArrowUp, ArrowDown, ArrowUpDown, Pause, Play, X, CircleCheck, TriangleAlert, Ban, ChevronDown, ChevronUp, ArchiveRestore, LoaderCircle } from "@lucide/svelte";
-  import { api, errorMessage, type Progress } from "$lib/api";
+  import { api, type Progress } from "$lib/api";
   import { formatSize } from "$lib/format";
   import { transfers, isFinished } from "$lib/transfers.svelte";
   import { t } from "$lib/i18n.svelte";
 
-  let { sessionId, onrestore }: { sessionId: string; onrestore: (backupId: string) => void } = $props();
+  let {
+    sessionId,
+    onrestore,
+    onerror,
+  }: { sessionId: string; onrestore: (backupId: string) => void; onerror: (e: unknown) => void } = $props();
 
   let open = $state(true);
   const jobs = $derived(transfers.jobs.filter((j) => j.session_id === sessionId));
@@ -45,7 +49,7 @@
     }
   }
 
-  const act = (p: Promise<unknown>) => p.catch((e) => console.error(errorMessage(e)));
+  const act = (p: Promise<unknown>) => p.catch(onerror);
 </script>
 
 {#if jobs.length}

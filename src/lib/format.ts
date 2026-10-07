@@ -1,6 +1,17 @@
 import { locale, t } from "./i18n.svelte";
 
-const sizeFmt = () => new Intl.NumberFormat(locale(), { maximumFractionDigits: 1 });
+/** One formatter per locale and kind; building an Intl formatter is slow and file lists call these per row. */
+function cached<T>(make: (locale: string) => T): () => T {
+  const byLocale = new Map<string, T>();
+  return () => {
+    const loc = locale();
+    let f = byLocale.get(loc);
+    if (!f) byLocale.set(loc, (f = make(loc)));
+    return f;
+  };
+}
+
+const sizeFmt = cached((l) => new Intl.NumberFormat(l, { maximumFractionDigits: 1 }));
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -14,9 +25,12 @@ export function formatSize(bytes: number): string {
   return `${sizeFmt().format(value)} ${units[unit]}`;
 }
 
-const timeFmt = () => new Intl.DateTimeFormat(locale(), { hour: "2-digit", minute: "2-digit" });
-const dayFmt = () => new Intl.DateTimeFormat(locale(), { day: "numeric", month: "short" });
-const yearFmt = () => new Intl.DateTimeFormat(locale(), { day: "numeric", month: "short", year: "numeric" });
+const timeFmt = cached((l) => new Intl.DateTimeFormat(l, { hour: "2-digit", minute: "2-digit" }));
+const dayFmt = cached((l) => new Intl.DateTimeFormat(l, { day: "numeric", month: "short" }));
+const yearFmt = cached((l) => new Intl.DateTimeFormat(l, { day: "numeric", month: "short", year: "numeric" }));
+
+/** Locale-aware string comparison, as `localeCompare` but without per-call setup. */
+export const collator = cached((l) => new Intl.Collator(l));
 
 export function formatDate(unixSeconds: number | null): string {
   if (unixSeconds == null) return "—";

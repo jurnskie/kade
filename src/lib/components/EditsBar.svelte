@@ -1,6 +1,6 @@
 <script lang="ts">
   import { FilePen, X, LoaderCircle, CircleCheck, TriangleAlert, Upload, Download, ExternalLink } from "@lucide/svelte";
-  import { api, errorMessage, type EditInfo } from "$lib/api";
+  import { api, type EditInfo } from "$lib/api";
   import { edits } from "$lib/edits.svelte";
   import { locale, t } from "$lib/i18n.svelte";
 
@@ -24,7 +24,7 @@
     }
   }
 
-  const act = (p: Promise<unknown>) => p.catch((e) => onerror({ kind: "other", message: errorMessage(e) }));
+  const act = (p: Promise<unknown>) => p.catch(onerror);
 </script>
 
 {#if mine.length}

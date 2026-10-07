@@ -5,10 +5,11 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::Session;
@@ -129,11 +130,24 @@ async fn serve(
     notify: Notify,
     session_id: String,
 ) {
+    // Owned here, so stopping the tunnel (aborting this task) also drops every
+    // connection it carries.
+    let mut conns = JoinSet::new();
     loop {
-        let Ok((mut stream, peer)) = listener.accept().await else { continue };
+        let (mut stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(c) => c,
+                // E.g. out of file descriptors: back off instead of spinning.
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            },
+            Some(_) = conns.join_next(), if !conns.is_empty() => continue,
+        };
         let (session, host, open, total, notify, sid) =
             (session.clone(), remote_host.clone(), open.clone(), total.clone(), notify.clone(), session_id.clone());
-        tokio::spawn(async move {
+        conns.spawn(async move {
             let Some(ssh) = session.ssh.as_ref() else { return };
             let channel =
                 match ssh.channel_open_direct_tcpip(host.as_str(), remote_port as u32, peer.ip().to_string(), peer.port() as u32).await {

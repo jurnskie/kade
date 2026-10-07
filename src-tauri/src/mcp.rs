@@ -6,7 +6,7 @@
 //! via kade.json) and the window is told to reload right away.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State as AxumState};
 use axum::http::{header, StatusCode};
@@ -359,44 +359,44 @@ impl KadeMcp {
 
     #[tool(description = "Change fields of an existing connection; omitted fields stay as they are.")]
     async fn update_connection(&self, Parameters(p): Parameters<UpdateConnection>) -> Result<CallToolResult, McpError> {
-        let mut c = match self.find(&p.id) {
-            Ok(c) => c,
+        // Resolved up front: the store is locked while the change is applied.
+        let workspace = match p.workspace.as_deref().map(|v| resolve_workspace(Some(v))).transpose() {
+            Ok(w) => w,
             Err(e) => return failed(e),
         };
-        if let Some(v) = p.name {
-            c.name = v.trim().into();
-        }
-        if let Some(v) = p.protocol {
-            c.protocol = v;
-        }
-        if let Some(v) = p.host {
-            c.host = v.trim().into();
-        }
-        if let Some(v) = p.port {
-            c.port = v;
-        }
-        if let Some(v) = p.user {
-            c.user = v.trim().into();
-        }
-        if let Some(v) = p.group {
-            c.group = v.trim().into();
-        }
-        if let Some(v) = p.workspace {
-            match resolve_workspace(Some(&v)) {
-                Ok(id) => c.workspace = id,
-                Err(e) => return failed(e),
+        let result = profiles::modify(&p.id, |c| {
+            if let Some(v) = p.name {
+                c.name = v.trim().into();
             }
-        }
-        if let Some(v) = p.auth {
-            c.auth = v;
-        }
-        if p.remote_path.is_some() {
-            c.remote_path = blank_to_none(p.remote_path);
-        }
-        if p.local_path.is_some() {
-            c.local_path = blank_to_none(p.local_path);
-        }
-        match profiles::upsert(c) {
+            if let Some(v) = p.protocol {
+                c.protocol = v;
+            }
+            if let Some(v) = p.host {
+                c.host = v.trim().into();
+            }
+            if let Some(v) = p.port {
+                c.port = v;
+            }
+            if let Some(v) = p.user {
+                c.user = v.trim().into();
+            }
+            if let Some(v) = p.group {
+                c.group = v.trim().into();
+            }
+            if let Some(id) = workspace {
+                c.workspace = id;
+            }
+            if let Some(v) = p.auth {
+                c.auth = v;
+            }
+            if p.remote_path.is_some() {
+                c.remote_path = blank_to_none(p.remote_path);
+            }
+            if p.local_path.is_some() {
+                c.local_path = blank_to_none(p.local_path);
+            }
+        });
+        match result {
             Ok(saved) => {
                 self.changed();
                 json(serde_json::json!({ "updated": out(&saved) }))
@@ -595,16 +595,23 @@ pub struct McpStatus {
     pub error: Option<String>,
 }
 
+struct Running {
+    port: u16,
+    cancel: CancellationToken,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
 #[derive(Default)]
 pub struct McpServer {
-    stop: Mutex<Option<CancellationToken>>,
+    running: Mutex<Option<Running>>,
+    /// Read on every request, so a new token applies without restarting.
+    token: Arc<RwLock<String>>,
     error: Mutex<Option<String>>,
 }
 
-async fn require_token(AxumState(token): AxumState<Arc<String>>, req: Request, next: Next) -> Response {
-    let expected = format!("Bearer {token}");
-    let ok = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).is_some_and(|v| v == expected);
-    if !ok {
+async fn require_token(AxumState(token): AxumState<Arc<RwLock<String>>>, req: Request, next: Next) -> Response {
+    let given = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
+    if given != Some(token.read().unwrap().as_str()) {
         return Response::builder().status(StatusCode::UNAUTHORIZED).body("unauthorized".into()).unwrap();
     }
     next.run(req).await
@@ -615,30 +622,33 @@ impl McpServer {
         let cfg = store::local_config().unwrap_or_default();
         McpStatus {
             enabled: cfg.mcp_enabled,
-            running: self.stop.lock().unwrap().is_some(),
+            running: self.running.lock().unwrap().is_some(),
             url: format!("http://127.0.0.1:{}/mcp", cfg.mcp_port),
             token: cfg.mcp_token,
             error: self.error.lock().unwrap().clone(),
         }
     }
 
-    pub fn stop(&self) {
-        if let Some(token) = self.stop.lock().unwrap().take() {
-            token.cancel();
-        }
-    }
-
     /// (Re)start according to the local config.
-    pub fn apply(&self, app: &AppHandle) {
-        self.stop();
-        *self.error.lock().unwrap() = None;
+    pub async fn apply(&self, app: &AppHandle) {
         let cfg = store::local_config().unwrap_or_default();
-        if !cfg.mcp_enabled || cfg.mcp_token.is_empty() {
+        *self.token.write().unwrap() = cfg.mcp_token.clone();
+        let wanted = cfg.mcp_enabled && !cfg.mcp_token.is_empty();
+        if wanted && self.running.lock().unwrap().as_ref().is_some_and(|r| r.port == cfg.mcp_port) {
+            return; // already serving; a new token is picked up per request
+        }
+        let old = self.running.lock().unwrap().take();
+        if let Some(old) = old {
+            old.cancel.cancel();
+            old.task.abort();
+            // Wait until the listener is dropped, so its port is free to bind again.
+            let _ = old.task.await;
+        }
+        *self.error.lock().unwrap() = None;
+        if !wanted {
             return;
         }
         let cancel = CancellationToken::new();
-        let app = app.clone();
-        let token = Arc::new(cfg.mcp_token.clone());
         let addr = SocketAddr::from(([127, 0, 0, 1], cfg.mcp_port));
 
         let mut config = StreamableHttpServerConfig::default();
@@ -651,13 +661,11 @@ impl McpServer {
             Arc::new(LocalSessionManager::default()),
             config,
         );
-        let router = axum::Router::new().nest_service("/mcp", service).layer(middleware::from_fn_with_state(token, require_token));
+        let router =
+            axum::Router::new().nest_service("/mcp", service).layer(middleware::from_fn_with_state(self.token.clone(), require_token));
 
-        // Bind synchronously so a busy port is reported in the settings.
-        let listener = match std::net::TcpListener::bind(addr).and_then(|l| {
-            l.set_nonblocking(true)?;
-            Ok(l)
-        }) {
+        // Bind here, not in the task, so a busy port is reported in the settings.
+        let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
             Err(e) => {
                 *self.error.lock().unwrap() =
@@ -665,28 +673,28 @@ impl McpServer {
                 return;
             }
         };
-        *self.stop.lock().unwrap() = Some(cancel.clone());
-        tauri::async_runtime::spawn(async move {
-            let Ok(listener) = tokio::net::TcpListener::from_std(listener) else { return };
-            let _ = axum::serve(listener, router).with_graceful_shutdown(async move { cancel.cancelled().await }).await;
+        let task = tauri::async_runtime::spawn({
+            let cancel = cancel.clone();
+            async move {
+                let _ = axum::serve(listener, router).with_graceful_shutdown(async move { cancel.cancelled().await }).await;
+            }
         });
+        *self.running.lock().unwrap() = Some(Running { port: cfg.mcp_port, cancel, task });
     }
 }
 
 /// Settings toggle: enabling creates a token the first time.
 pub fn set_enabled(enabled: bool) -> Result<(), AppError> {
-    let mut cfg = store::local_config()?;
-    cfg.mcp_enabled = enabled;
-    if enabled && cfg.mcp_token.is_empty() {
-        cfg.mcp_token = new_token();
-    }
-    store::save_local(&cfg)
+    store::update_local(|cfg| {
+        cfg.mcp_enabled = enabled;
+        if enabled && cfg.mcp_token.is_empty() {
+            cfg.mcp_token = new_token();
+        }
+    })
 }
 
 pub fn regenerate_token() -> Result<(), AppError> {
-    let mut cfg = store::local_config()?;
-    cfg.mcp_token = new_token();
-    store::save_local(&cfg)
+    store::update_local(|cfg| cfg.mcp_token = new_token())
 }
 
 fn new_token() -> String {

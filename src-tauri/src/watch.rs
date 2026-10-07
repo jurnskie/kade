@@ -35,6 +35,7 @@ impl StoreWatcher {
             let conflict = names.iter().any(|n| n.to_lowercase().contains("conflict"));
             let contents = std::fs::read_to_string(&file).unwrap_or_default();
             if conflict || store::is_foreign_change(&contents) {
+                store::invalidate();
                 let _ = app.emit("store-changed", ());
             }
         })

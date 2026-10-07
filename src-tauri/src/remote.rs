@@ -74,6 +74,39 @@ fn meta_from_sftp(m: &FileAttributes) -> Meta {
     Meta { is_dir: m.is_dir(), is_symlink: m.file_type().is_symlink(), size: m.size.unwrap_or(0), mtime: m.mtime.map(i64::from) }
 }
 
+/// A single path segment: no separators, not `.` or `..`.
+fn is_plain_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..") && !name.contains(['/', '\0'])
+}
+
+async fn sftp_list(sftp: &SftpSession, dir: &str) -> AppResult<Vec<Entry>> {
+    let mut out = Vec::new();
+    let mut links = Vec::new();
+    for item in sftp.read_dir(dir).await? {
+        let name = item.file_name();
+        let meta = item.metadata();
+        if meta.file_type().is_symlink() {
+            links.push(out.len());
+        }
+        out.push(Entry {
+            path: join_remote(dir, &name),
+            name,
+            is_dir: meta.is_dir(),
+            is_symlink: meta.file_type().is_symlink(),
+            size: meta.size.unwrap_or(0),
+            modified: meta.mtime.map(i64::from),
+            permissions: meta.permissions.map(format_mode),
+        });
+    }
+    // read_dir reports the links themselves; follow them to know which lead to a
+    // directory. All at once: SFTP pipelines the requests.
+    let targets = futures_util::future::join_all(links.iter().map(|&i| sftp.metadata(out[i].path.clone()))).await;
+    for (i, target) in links.into_iter().zip(targets) {
+        out[i].is_dir = target.is_ok_and(|m| m.is_dir());
+    }
+    Ok(out)
+}
+
 impl RemoteFs {
     /// Backups may be kept on the server only where moving files there is
     /// cheap and private: SFTP into the user's home. FTP roots are often the
@@ -100,34 +133,14 @@ impl RemoteFs {
     }
 
     pub async fn list(&self, dir: &str) -> AppResult<Vec<Entry>> {
-        match self {
-            RemoteFs::Ftp(ftp) => ftp.list(dir).await,
-            RemoteFs::Sftp(sftp) => {
-                let mut out = Vec::new();
-                for item in sftp.read_dir(dir).await? {
-                    let name = item.file_name();
-                    if name == "." || name == ".." {
-                        continue;
-                    }
-                    let full = join_remote(dir, &name);
-                    let meta = item.metadata();
-                    let is_symlink = meta.file_type().is_symlink();
-                    // read_dir reports the link itself; follow it to know if it leads to a directory.
-                    let is_dir =
-                        if is_symlink { sftp.metadata(full.clone()).await.map(|m| m.is_dir()).unwrap_or(false) } else { meta.is_dir() };
-                    out.push(Entry {
-                        name,
-                        path: full,
-                        is_dir,
-                        is_symlink,
-                        size: meta.size.unwrap_or(0),
-                        modified: meta.mtime.map(i64::from),
-                        permissions: meta.permissions.map(format_mode),
-                    });
-                }
-                Ok(out)
-            }
-        }
+        let mut entries = match self {
+            RemoteFs::Ftp(ftp) => ftp.list(dir).await?,
+            RemoteFs::Sftp(sftp) => sftp_list(sftp, dir).await?,
+        };
+        // A broken or hostile server could send `../x` or `/etc/x`, which a
+        // download would then write outside its destination.
+        entries.retain(|e| is_plain_name(&e.name));
+        Ok(entries)
     }
 
     /// Metadata following symlinks; `None` when the path does not exist.
@@ -293,6 +306,19 @@ impl RemoteFs {
             RemoteFs::Sftp(sftp) => {
                 let _ = sftp.close().await;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_plain_name;
+
+    #[test]
+    fn plain_names_only() {
+        assert!(is_plain_name("index.php") && is_plain_name(".env") && is_plain_name("..x"));
+        for bad in ["", ".", "..", "../x", "/etc"] {
+            assert!(!is_plain_name(bad), "{bad:?}");
         }
     }
 }

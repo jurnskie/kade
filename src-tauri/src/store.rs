@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -136,10 +137,6 @@ fn default_mcp_port() -> u16 {
     7311
 }
 
-pub fn save_local(cfg: &LocalConfig) -> AppResult<()> {
-    save_local_config(cfg)
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncStatus {
     pub sync_dir: Option<String>,
@@ -153,9 +150,28 @@ pub struct SyncStatus {
 struct Inner {
     last_written: Option<String>,
     merged_conflicts: Vec<String>,
+    cache: Option<Cached>,
 }
 
-static STATE: Mutex<Inner> = Mutex::new(Inner { last_written: None, merged_conflicts: Vec::new() });
+/// The data as last read or written, reused while the file is unchanged:
+/// most commands load the store, and parsing it each time adds up on a
+/// synced or network folder.
+struct Cached {
+    path: PathBuf,
+    stamp: Stamp,
+    data: Data,
+}
+
+type Stamp = (Option<SystemTime>, u64);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    std::fs::metadata(path).ok().map(|m| (m.modified().ok(), m.len()))
+}
+
+static STATE: Mutex<Inner> = Mutex::new(Inner { last_written: None, merged_conflicts: Vec::new(), cache: None });
+
+/// The per-machine config, cached by path; only this process writes it.
+static LOCAL: Mutex<Option<(PathBuf, LocalConfig)>> = Mutex::new(None);
 
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -187,21 +203,33 @@ impl Default for LocalConfig {
 }
 
 pub fn local_config() -> AppResult<LocalConfig> {
-    let path = config_dir()?.join(CONFIG_FILE);
-    if !path.exists() {
-        return Ok(LocalConfig::default());
-    }
-    Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+    read_local(&mut LOCAL.lock().unwrap())
 }
 
-fn save_local_config(cfg: &LocalConfig) -> AppResult<()> {
-    write_atomic(&config_dir()?.join(CONFIG_FILE), &serde_json::to_string_pretty(cfg)?)
+fn read_local(cache: &mut Option<(PathBuf, LocalConfig)>) -> AppResult<LocalConfig> {
+    let path = config_dir()?.join(CONFIG_FILE);
+    if let Some((_, cfg)) = cache.as_ref().filter(|(p, _)| *p == path) {
+        return Ok(cfg.clone());
+    }
+    let cfg = if path.exists() { serde_json::from_str(&std::fs::read_to_string(&path)?)? } else { LocalConfig::default() };
+    *cache = Some((path, cfg.clone()));
+    Ok(cfg)
+}
+
+/// Load, apply `f`, save the per-machine config — atomically with respect to
+/// other callers.
+pub fn update_local<T>(f: impl FnOnce(&mut LocalConfig) -> T) -> AppResult<T> {
+    let mut cache = LOCAL.lock().unwrap();
+    let mut cfg = read_local(&mut cache)?;
+    let out = f(&mut cfg);
+    let path = config_dir()?.join(CONFIG_FILE);
+    write_atomic(&path, &serde_json::to_string_pretty(&cfg)?)?;
+    *cache = Some((path, cfg));
+    Ok(out)
 }
 
 pub fn set_editor(editor: &str) -> AppResult<()> {
-    let mut cfg = local_config()?;
-    cfg.editor = editor.trim().to_string();
-    save_local_config(&cfg)
+    update_local(|cfg| cfg.editor = editor.trim().to_string())
 }
 
 pub fn data_dir() -> AppResult<PathBuf> {
@@ -301,15 +329,22 @@ pub fn merge(a: Data, b: Data) -> Data {
 fn save_locked(inner: &mut Inner, dir: &Path, data: &Data) -> AppResult<()> {
     std::fs::create_dir_all(dir)?;
     let json = serde_json::to_string_pretty(data)?;
-    write_atomic(&dir.join(DATA_FILE), &json)?;
+    let path = dir.join(DATA_FILE);
+    write_atomic(&path, &json)?;
     inner.last_written = Some(json);
+    inner.cache = stamp(&path).map(|stamp| Cached { path, stamp, data: data.clone() });
     Ok(())
 }
 
 fn load_locked(inner: &mut Inner, dir: &Path) -> AppResult<Data> {
     let path = dir.join(DATA_FILE);
-    let mut data = if path.exists() {
-        read_data(&path)?
+    let cached = inner.cache.as_ref().filter(|c| c.path == path && Some(c.stamp) == stamp(&path)).map(|c| c.data.clone());
+    let mut data = if let Some(data) = cached {
+        data
+    } else if path.exists() {
+        let data = read_data(&path)?;
+        inner.cache = stamp(&path).map(|stamp| Cached { path: path.clone(), stamp, data: data.clone() });
+        data
     } else {
         // First run after upgrading: pick up the old local servers.json.
         let legacy = config_dir()?.join(LEGACY_FILE);
@@ -351,9 +386,19 @@ pub fn update<T>(f: impl FnOnce(&mut Data) -> AppResult<T>) -> AppResult<T> {
     let mut inner = STATE.lock().unwrap();
     let dir = data_dir()?;
     let mut data = load_locked(&mut inner, &dir)?;
+    let before = serde_json::to_string(&data)?;
     let out = f(&mut data)?;
-    save_locked(&mut inner, &dir, &data)?;
+    // Unchanged: don't write, so sync clients don't see a change.
+    if serde_json::to_string(&data)? != before {
+        save_locked(&mut inner, &dir, &data)?;
+    }
     Ok(out)
+}
+
+/// Forget the cached data; the watcher calls this when another machine (or a
+/// sync client) changed the file.
+pub fn invalidate() {
+    STATE.lock().unwrap().cache = None;
 }
 
 /// True when `contents` is not what this process last wrote.
@@ -390,9 +435,7 @@ pub fn set_sync_dir(target: Option<PathBuf>) -> AppResult<SyncStatus> {
         };
         let existing = if target_dir.join(DATA_FILE).exists() { read_data(&target_dir.join(DATA_FILE))? } else { Data::default() };
         save_locked(&mut inner, &target_dir, &merge(existing, current))?;
-        let mut cfg = local_config()?;
-        cfg.sync_dir = target;
-        save_local_config(&cfg)?;
+        update_local(|cfg| cfg.sync_dir = target)?;
         inner.merged_conflicts.clear();
     }
     status()

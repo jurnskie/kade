@@ -18,7 +18,16 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
 
-  onMount(async () => (status = await api.syncStatus()));
+  /** Run `fn`, showing a failure in the error note. */
+  async function attempt(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  }
+
+  onMount(() => attempt(async () => (status = await api.syncStatus())));
 
   async function setDir(dir: string | null) {
     busy = true;
@@ -38,31 +47,39 @@
     if (typeof dir === "string") await setDir(dir);
   }
 
-  async function toggleHidden() {
-    await api.saveSettings({ ...settings, show_hidden: !settings.show_hidden });
-    onchange();
+  function toggleHidden() {
+    return attempt(async () => {
+      await api.saveSettings({ ...settings, show_hidden: !settings.show_hidden });
+      onchange();
+    });
   }
 
   let editorChoice = $state<EditorChoice | null>(null);
   /** "" = automatic, an option's command, or "custom". */
   let editorPick = $state("");
   let customEditor = $state("");
-  onMount(async () => {
-    const c = await api.getEditor();
-    editorChoice = c;
-    const known = c.current === "" || c.options.some((o) => o.command === c.current);
-    editorPick = known ? c.current : "custom";
-    customEditor = known ? "" : c.current;
-  });
+  onMount(() =>
+    attempt(async () => {
+      const c = await api.getEditor();
+      editorChoice = c;
+      const known = c.current === "" || c.options.some((o) => o.command === c.current);
+      editorPick = known ? c.current : "custom";
+      customEditor = known ? "" : c.current;
+    }),
+  );
 
-  async function pickEditor(pick: string) {
+  function pickEditor(pick: string) {
     editorPick = pick;
-    if (pick !== "custom") await api.setEditor(pick);
-    else if (customEditor.trim()) await api.setEditor(customEditor.trim());
+    return attempt(async () => {
+      if (pick !== "custom") await api.setEditor(pick);
+      else if (customEditor.trim()) await api.setEditor(customEditor.trim());
+    });
   }
 
-  async function saveCustom() {
-    if (editorPick === "custom" && customEditor.trim()) await api.setEditor(customEditor.trim());
+  function saveCustom() {
+    return attempt(async () => {
+      if (editorPick === "custom" && customEditor.trim()) await api.setEditor(customEditor.trim());
+    });
   }
 
   let update = $state<UpdateInfo | null>(null);
@@ -71,8 +88,13 @@
 
   async function checkUpdate() {
     checking = true;
-    update = await api.updateCheck();
-    checking = false;
+    try {
+      update = await api.updateCheck();
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      checking = false;
+    }
   }
   onMount(() => {
     checkUpdate();
@@ -94,7 +116,7 @@
   let mcp = $state<McpStatus | null>(null);
   let showToken = $state(false);
   let copied = $state<string | null>(null);
-  onMount(async () => (mcp = await api.mcpStatus()));
+  onMount(() => attempt(async () => (mcp = await api.mcpStatus())));
 
   const claudeCommand = $derived(
     mcp ? `claude mcp add --transport http kade ${mcp.url} --header "Authorization: Bearer ${mcp.token}"` : "",
@@ -108,16 +130,20 @@
     }
   }
 
-  async function copy(label: string, value: string) {
-    await navigator.clipboard.writeText(value);
-    copied = label;
-    setTimeout(() => (copied = null), 1500);
+  function copy(label: string, value: string) {
+    return attempt(async () => {
+      await navigator.clipboard.writeText(value);
+      copied = label;
+      setTimeout(() => (copied = null), 1500);
+    });
   }
 
-  async function setRetention(e: Event) {
+  function setRetention(e: Event) {
     const days = Number((e.target as HTMLSelectElement).value);
-    await api.saveSettings({ ...settings, backup_retention_days: days });
-    onchange();
+    return attempt(async () => {
+      await api.saveSettings({ ...settings, backup_retention_days: days });
+      onchange();
+    });
   }
 </script>
 
@@ -297,7 +323,7 @@
           <code class="mono">{showToken ? claudeCommand : claudeCommand.replace(mcp.token, "•••")}</code>
           <button class="btn sm" onclick={() => copy("cmd", claudeCommand)}>{copied === "cmd" ? t("Copied") : t("Copy")}</button>
         </div>
-        <button class="btn sm ghost" onclick={async () => (mcp = await api.mcpRegenerateToken())}>
+        <button class="btn sm ghost" onclick={() => attempt(async () => (mcp = await api.mcpRegenerateToken()))}>
           {t("Create a new token (the old one stops working)")}
         </button>
       {/if}

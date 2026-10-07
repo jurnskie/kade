@@ -128,10 +128,18 @@
     const account = opAccount;
     if (!usesOp || !account) return;
     opVaults = [];
-    api.opVaults(account).then((v) => {
-      opVaults = v;
-      if (opVault && !v.some((x) => x.id === opVault)) opVault = "";
-    });
+    let cancelled = false;
+    api
+      .opVaults(account)
+      .then((v) => {
+        if (cancelled) return;
+        opVaults = v;
+        if (opVault && !v.some((x) => x.id === opVault)) opVault = "";
+      })
+      .catch((e) => {
+        if (!cancelled) opError = errorMessage(e);
+      });
+    return () => (cancelled = true);
   });
 
   // Logins (for passwords) or SSH keys in the chosen account/vault.
@@ -141,14 +149,21 @@
     if (choice !== "one_password_secret" && choice !== "one_password") return;
     opLoading = true;
     opError = null;
-    const done = () => (opLoading = false);
+    let cancelled = false;
+    const fail = (e: unknown) => {
+      if (!cancelled) opError = errorMessage(e);
+    };
+    const done = () => {
+      if (!cancelled) opLoading = false;
+    };
     if (choice === "one_password_secret") {
       opItems = null;
-      api.opItems(account, vault || null).then((i) => (opItems = i)).catch((e) => (opError = errorMessage(e))).finally(done);
+      api.opItems(account, vault || null).then((i) => !cancelled && (opItems = i)).catch(fail).finally(done);
     } else {
       opKeys = null;
-      api.opSshKeys(account, vault || null).then((k) => (opKeys = k)).catch((e) => (opError = errorMessage(e))).finally(done);
+      api.opSshKeys(account, vault || null).then((k) => !cancelled && (opKeys = k)).catch(fail).finally(done);
     }
+    return () => (cancelled = true);
   });
 
   function pickOpKey(k: OpSshKey) {
@@ -179,11 +194,13 @@
     keysLoading = true;
     keysError = null;
     keys = [];
+    let cancelled = false;
     api
       .agentKeys(auth)
-      .then((k) => (keys = k))
-      .catch((e) => (keysError = errorMessage(e)))
-      .finally(() => (keysLoading = false));
+      .then((k) => !cancelled && (keys = k))
+      .catch((e) => !cancelled && (keysError = errorMessage(e)))
+      .finally(() => !cancelled && (keysLoading = false));
+    return () => (cancelled = true);
   });
 
   /** Accept pasted `sftp://user@host:port/path` or `user@host`. */
@@ -192,7 +209,7 @@
     const m = text.match(/^(?:(sftp|ssh|ftps?):\/\/)?(?:([^@\s/]+)@)?([^:\s/]+)(?::(\d+))?(\/\S*)?$/);
     if (!m || (!m[1] && !m[2])) return;
     e.preventDefault();
-    if (m[1]) protocol = m[1] as Protocol;
+    if (m[1]) setProtocol(m[1] as Protocol);
     if (m[2]) user = m[2];
     host = m[3];
     if (m[4]) port = Number(m[4]);

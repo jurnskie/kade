@@ -139,9 +139,20 @@ async fn download_verified(tag: &str, asset: &str, dir: &Path) -> AppResult<Path
     Ok(file)
 }
 
+/// `1.2.3`-style: two to four dot-separated numbers.
+fn is_version(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    (2..=4).contains(&parts.len()) && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Install release `version` over the running app, then restart it.
 pub async fn install(app: AppHandle, version: String) -> AppResult<()> {
-    let tag = format!("v{}", version.trim_start_matches('v'));
+    let version = version.trim_start_matches('v');
+    // It ends up in the download URL, so only a plain version number.
+    if !is_version(version) {
+        return Err(AppError::other(tr!("Invalid version {version}", "Ongeldige versie {version}", version = version)));
+    }
+    let tag = format!("v{version}");
     let work = std::env::temp_dir().join(format!("kade-update-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&work)?;
     let result = async {
@@ -215,6 +226,14 @@ pub async fn install(app: AppHandle, version: String) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_are_plain_numbers() {
+        assert!(is_version("0.6.4") && is_version("1.0"));
+        for bad in ["", "1", "1.", "1.2.3-beta", "../../x/1.0", "1.2.3.4.5"] {
+            assert!(!is_version(bad), "{bad:?}");
+        }
+    }
 
     /// Run alone (it changes PATH): cargo test download_verified -- --ignored
     #[tokio::test]

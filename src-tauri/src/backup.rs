@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::{join_remote, Session};
@@ -171,32 +172,45 @@ fn move_local(src: &Path, dst: &Path) -> AppResult<()> {
     Ok(())
 }
 
-async fn download_tree(session: &Session, src: &str, dst: &Path) -> AppResult<()> {
+async fn download_tree(session: &Session, src: &str, dst: &Path, is_dir: bool) -> AppResult<()> {
     let fs = session.fs()?;
+    if !is_dir {
+        return download_file(fs, src, dst).await;
+    }
+    // The listing says what each child is, so no extra request per entry.
     let mut stack = vec![(src.to_string(), dst.to_path_buf())];
-    while let Some((src, dst)) = stack.pop() {
-        if fs.is_real_dir(&src).await? {
-            std::fs::create_dir_all(&dst)?;
-            for entry in fs.list(&src).await? {
-                stack.push((entry.path, dst.join(&entry.name)));
+    while let Some((dir, local)) = stack.pop() {
+        std::fs::create_dir_all(&local)?;
+        for entry in fs.list(&dir).await? {
+            let to = local.join(&entry.name);
+            match (entry.is_dir, entry.is_symlink) {
+                (true, false) => stack.push((entry.path, to)),
+                // Neither FTP nor this backup can recreate a link, and following it
+                // could copy half the server; the link is left out of the backup.
+                (true, true) => eprintln!("kade: not backing up symlinked folder {}", entry.path),
+                (false, _) => download_file(fs, &entry.path, &to).await?,
             }
-        } else {
-            if let Some(p) = dst.parent() {
-                std::fs::create_dir_all(p)?;
-            }
-            let mut from = fs.reader(&src).await?;
-            let mut to = tokio::fs::File::create(&dst).await?;
-            let mut buf = vec![0u8; 256 * 1024];
-            loop {
-                let n = from.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                tokio::io::AsyncWriteExt::write_all(&mut to, &buf[..n]).await?;
-            }
-            from.finish().await?;
         }
     }
+    Ok(())
+}
+
+async fn download_file(fs: &crate::remote::RemoteFs, src: &str, dst: &Path) -> AppResult<()> {
+    if let Some(p) = dst.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut from = fs.reader(src).await?;
+    let mut to = tokio::fs::File::create(dst).await?;
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = from.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        to.write_all(&buf[..n]).await?;
+    }
+    from.finish().await?;
+    to.flush().await?;
     Ok(())
 }
 
@@ -230,18 +244,22 @@ async fn upload_tree(session: &Session, src: &Path, dst: &str) -> AppResult<()> 
     Ok(())
 }
 
-/// Collects the items of one transaction as they are moved aside.
+/// Collects the items of one transaction as they are moved aside. Several
+/// files may be stashed at once (a transfer copies files in parallel).
 pub struct Recorder {
-    tx: Transaction,
+    id: String,
+    side: Side,
+    tx: Mutex<Transaction>,
     /// Remote backup folders known to exist, so each file's stash doesn't re-check the whole path.
-    remote_dirs: HashSet<String>,
+    remote_dirs: tokio::sync::Mutex<HashSet<String>>,
 }
 
 impl Recorder {
     pub fn new(side: Side, op: Op, session: Option<&Session>, summary: impl Into<String>) -> Self {
+        let id = format!("{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &uuid::Uuid::new_v4().to_string()[..8]);
         Recorder {
-            tx: Transaction {
-                id: format!("{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &uuid::Uuid::new_v4().to_string()[..8]),
+            tx: Mutex::new(Transaction {
+                id: id.clone(),
                 created: now_ms(),
                 side,
                 op,
@@ -250,33 +268,47 @@ impl Recorder {
                 server_name: session.map(|s| s.server_name.clone()),
                 entries: Vec::new(),
                 restored: false,
-            },
-            remote_dirs: HashSet::new(),
+            }),
+            id,
+            side,
+            remote_dirs: Default::default(),
         }
     }
 
     pub fn id(&self) -> &str {
-        &self.tx.id
+        &self.id
+    }
+
+    fn local_copy_path(&self, path: &str) -> AppResult<PathBuf> {
+        Ok(local_root()?.join(&self.id).join(path.trim_start_matches('/')))
     }
 
     /// Move `path` into the backup. Afterwards `path` no longer exists.
-    pub async fn stash(&mut self, session: Option<&Session>, path: &str) -> AppResult<()> {
-        match (self.tx.side, session) {
+    pub async fn stash(&self, session: Option<&Session>, path: &str) -> AppResult<()> {
+        self.stash_known(session, path, None).await
+    }
+
+    /// [`stash`](Self::stash), with `is_dir` passed in when the caller already
+    /// knows it (saves a request per file).
+    pub async fn stash_known(&self, session: Option<&Session>, path: &str, is_dir: Option<bool>) -> AppResult<()> {
+        match (self.side, session) {
             (Side::Remote, Some(session)) => guard_remote(session, path)?,
             _ => crate::fs::guard(path)?,
         }
-        let local_tx = local_root()?.join(&self.tx.id);
-        let entry = match (self.tx.side, session) {
+        let entry = match (self.side, session) {
             (Side::Local, _) => {
                 let src = Path::new(path);
                 let is_dir = std::fs::symlink_metadata(src)?.is_dir();
-                let dst = local_tx.join(path.trim_start_matches('/'));
+                let dst = self.local_copy_path(path)?;
                 move_local(src, &dst)?;
                 BackupEntry { original: path.into(), stored: dst.to_string_lossy().into(), stored_on: Side::Local, is_dir }
             }
             (Side::Remote, Some(session)) => {
                 let fs = session.fs()?;
-                let is_dir = fs.is_real_dir(path).await?;
+                let is_dir = match is_dir {
+                    Some(d) => d,
+                    None => fs.is_real_dir(path).await?,
+                };
                 let local_copy = |dst: &Path| BackupEntry {
                     original: path.into(),
                     stored: dst.to_string_lossy().into(),
@@ -284,67 +316,83 @@ impl Recorder {
                     is_dir,
                 };
                 if fs.keeps_backups_on_server() {
-                    let root = remote_tx_root(session, &self.tx.id)?;
+                    let root = remote_tx_root(session, &self.id)?;
                     let stored = mirrored(&root, path);
-                    fs.mkdir_p_cached(parent(&stored), &mut self.remote_dirs).await?;
+                    fs.mkdir_p_cached(parent(&stored), &mut *self.remote_dirs.lock().await).await?;
                     if fs.rename(path, &stored).await.is_ok() {
                         BackupEntry { original: path.into(), stored, stored_on: Side::Remote, is_dir }
                     } else {
                         // Different filesystem on the server: keep a local copy instead,
                         // and drop the now-unused folders we just created for it.
                         fs.rmdir_up(parent(&stored), &root).await;
-                        self.remote_dirs.clear();
-                        let dst = local_tx.join(path.trim_start_matches('/'));
-                        download_tree(session, path, &dst).await?;
-                        fs.delete_tree(path).await?;
-                        local_copy(&dst)
+                        self.remote_dirs.lock().await.clear();
+                        local_copy(&self.download_and_delete(session, path, is_dir).await?)
                     }
                 } else {
-                    let dst = local_tx.join(path.trim_start_matches('/'));
-                    download_tree(session, path, &dst).await?;
-                    fs.delete_tree(path).await?;
-                    local_copy(&dst)
+                    local_copy(&self.download_and_delete(session, path, is_dir).await?)
                 }
             }
             (Side::Remote, None) => return Err(AppError::SessionNotFound),
         };
-        self.tx.entries.push(entry);
+        self.tx.lock().unwrap().entries.push(entry);
         Ok(())
+    }
+
+    /// Keep a local copy of a server item, then remove it from the server.
+    async fn download_and_delete(&self, session: &Session, path: &str, is_dir: bool) -> AppResult<PathBuf> {
+        let dst = self.local_copy_path(path)?;
+        download_tree(session, path, &dst, is_dir).await?;
+        let fs = session.fs()?;
+        if is_dir {
+            fs.delete_tree(path).await?;
+        } else {
+            fs.remove_file(path).await?;
+        }
+        Ok(dst)
     }
 
     /// Undo the stash of `path`, for when what should have replaced it failed.
     /// On error the entry stays in the transaction, so it can still be restored.
-    pub async fn put_back(&mut self, session: Option<&Session>, path: &str) -> AppResult<()> {
-        let Some(i) = self.tx.entries.iter().rposition(|e| e.original == path) else { return Ok(()) };
-        move_back(self.tx.side, session, &self.tx.entries[i]).await?;
-        let entry = self.tx.entries.remove(i);
+    pub async fn put_back(&self, session: Option<&Session>, path: &str) -> AppResult<()> {
+        let entry = {
+            let tx = self.tx.lock().unwrap();
+            let Some(entry) = tx.entries.iter().rfind(|e| e.original == path) else { return Ok(()) };
+            entry.clone()
+        };
+        move_back(self.side, session, &entry).await?;
+        let now_empty = {
+            let mut tx = self.tx.lock().unwrap();
+            tx.entries.retain(|e| e.stored != entry.stored);
+            tx.entries.is_empty()
+        };
         if let (Side::Remote, Some(s)) = (entry.stored_on, session) {
             // Drop the backup folders that are now empty.
-            let root = remote_tx_root(s, &self.tx.id)?;
+            let root = remote_tx_root(s, &self.id)?;
             s.fs()?.rmdir_up(parent(&entry.stored), &root).await;
-            self.remote_dirs.clear();
+            self.remote_dirs.lock().await.clear();
         }
-        let local_tx = local_root()?.join(&self.tx.id);
-        if self.tx.entries.is_empty() && local_tx.exists() {
+        let local_tx = local_root()?.join(&self.id);
+        if now_empty && local_tx.exists() {
             std::fs::remove_dir_all(local_tx)?;
         }
         Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tx.entries.is_empty()
+        self.tx.lock().unwrap().entries.is_empty()
     }
 
     /// Record the transaction (no-op when nothing was backed up).
     pub fn commit(self) -> AppResult<Option<Transaction>> {
-        if self.tx.entries.is_empty() {
+        let tx = self.tx.into_inner().unwrap();
+        if tx.entries.is_empty() {
             return Ok(None);
         }
         let _guard = INDEX.lock().unwrap();
         let mut txs = load_index()?;
-        txs.push(self.tx.clone());
+        txs.push(tx.clone());
         save_index(&txs)?;
-        Ok(Some(self.tx))
+        Ok(Some(tx))
     }
 }
 
@@ -386,7 +434,7 @@ pub async fn restore(id: &str, session: Option<&Session>) -> AppResult<Option<Tr
         }
     }
 
-    let mut undo = Recorder::new(tx.side, Op::Restore, session, tr!("Restoring: {}", "Terugzetten van: {}", tx.summary));
+    let undo = Recorder::new(tx.side, Op::Restore, session, tr!("Restoring: {}", "Terugzetten van: {}", tx.summary));
     for entry in &tx.entries {
         if exists(tx.side, session, &entry.original).await? {
             undo.stash(session, &entry.original).await?;
@@ -468,7 +516,7 @@ mod tests {
         std::fs::write(work.join("sub/a.txt"), "hello").unwrap();
         let path = work.to_string_lossy().into_owned();
 
-        let mut rec = Recorder::new(Side::Local, Op::Delete, None, "test");
+        let rec = Recorder::new(Side::Local, Op::Delete, None, "test");
         rec.stash(None, &path).await.unwrap();
         let tx = rec.commit().unwrap().unwrap();
         assert!(!work.exists(), "original should be moved away");

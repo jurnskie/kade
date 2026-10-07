@@ -123,6 +123,8 @@
     }
   }
   let undoTimer: ReturnType<typeof setTimeout> | undefined;
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function reloadStore() {
     workspaces = await api.listWorkspaces();
@@ -164,9 +166,9 @@
   const groups = $derived([...new Set(visibleServers.map((s) => s.group).filter(Boolean))]);
 
   onMount(async () => {
-    localHome = await api.localHome();
+    localHome = await api.localHome().catch((e) => (showError(e), localHome));
     syncBackendLanguage();
-    await reloadStore();
+    await reloadStore().catch(showError);
     // Another machine changed kade.json through the sync folder.
     listen("store-changed", () => reloadStore().catch(showError));
 
@@ -271,8 +273,9 @@
   }
 
   function showError(e: unknown) {
+    clearTimeout(toastTimer);
     toast = errorMessage(e);
-    setTimeout(() => (toast = null), 6000);
+    toastTimer = setTimeout(() => (toast = null), 6000);
   }
 
   function expandHome(p: string | null): string {
@@ -556,7 +559,7 @@
           </div>
           <div class:hidden={tab.view !== "files"}>
             <EditsBar sessionId={tab.sessionId} onerror={showError} />
-            <TransferQueue sessionId={tab.sessionId} onrestore={restoreBackup} />
+            <TransferQueue sessionId={tab.sessionId} onrestore={restoreBackup} onerror={showError} />
           </div>
         {/if}
         {#if tab.hasTerminal}
@@ -692,7 +695,8 @@
       await reloadStore().catch(showError);
       switchWorkspace(ws);
       notice = tn(n, "Imported {n} connection", "Imported {n} connections");
-      setTimeout(() => (notice = null), 5000);
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => (notice = null), 5000);
     }}
     onclose={() => (importOpen = false)}
   />

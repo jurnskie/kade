@@ -129,7 +129,7 @@ async fn scenario(base: &Path) {
 
     // Deleting on the server moves the folder aside; restore puts it back.
     let target = remote.join("site").to_string_lossy().into_owned();
-    let mut rec = Recorder::new(Side::Remote, Op::Delete, Some(&session), "e2e delete");
+    let rec = Recorder::new(Side::Remote, Op::Delete, Some(&session), "e2e delete");
     rec.stash(Some(&session), &target).await.unwrap();
     let tx = rec.commit().unwrap().unwrap();
     assert!(!remote.join("site").exists());
@@ -268,7 +268,7 @@ async fn e2e_ftp() {
         assert_eq!(read(on_disk(&format!("{dir}/site/a.txt"))), "v1");
 
         // Delete a folder into a backup and bring it back.
-        let mut rec = Recorder::new(Side::Remote, Op::Delete, Some(&session), "ftp delete");
+        let rec = Recorder::new(Side::Remote, Op::Delete, Some(&session), "ftp delete");
         rec.stash(Some(&session), &format!("{dir}/site")).await.unwrap();
         let tx = rec.commit().unwrap().unwrap();
         assert!(!on_disk(&format!("{dir}/site")).exists());

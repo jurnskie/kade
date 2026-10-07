@@ -160,18 +160,15 @@ fn unix_secs(t: SystemTime) -> i64 {
 
 /// Top-level names in `sources` that already exist in `dest_dir`.
 pub async fn conflicts(session: &Session, direction: Direction, sources: &[String], dest_dir: &str) -> AppResult<Vec<String>> {
-    let mut out = Vec::new();
-    for src in sources {
-        let name = basename(src);
-        let exists = match direction {
-            Direction::Upload => session.fs()?.exists(&join_remote(dest_dir, &name)).await?,
-            Direction::Download => Path::new(dest_dir).join(&name).exists(),
-        };
-        if exists {
-            out.push(name);
+    let names = sources.iter().map(|s| basename(s));
+    Ok(match direction {
+        // One listing instead of a request per name (on FTP each is a LIST anyway).
+        Direction::Upload => {
+            let existing: HashSet<String> = session.fs()?.list(dest_dir).await?.into_iter().map(|e| e.name).collect();
+            names.filter(|n| existing.contains(n)).collect()
         }
-    }
-    Ok(out)
+        Direction::Download => names.filter(|n| Path::new(dest_dir).join(n).exists()).collect(),
+    })
 }
 
 /// One file to copy (or directory to create) after scanning.
@@ -430,7 +427,7 @@ async fn transfer_file(
     listings: &Listings,
     ctl: &Ctl,
     rep: &SharedReporter,
-    undo: &tokio::sync::Mutex<&mut Recorder>,
+    undo: &Recorder,
 ) -> AppResult<()> {
     ctl.checkpoint().await?;
     let side = match direction {
@@ -447,8 +444,10 @@ async fn transfer_file(
         Decision::Copy { replaces } => replaces,
     };
     if replaces {
-        let mut undo = undo.lock().await;
-        undo.stash(side, &item.dst).await?;
+        // The listing already says what the destination is; no lock either, so
+        // overwrites run as parallel as the copies.
+        let is_dir = listings.entries.get(&item.dst).map(|m| m.is_dir && !m.is_symlink);
+        undo.stash_known(side, &item.dst, is_dir).await?;
         rep.lock().unwrap().progress.backup_id = Some(undo.id().to_string());
     }
     if let Err(e) = copy_file(session, direction, item, ctl, rep).await {
@@ -463,7 +462,6 @@ async fn transfer_file(
         }
         // And put back the file it was replacing.
         if replaces {
-            let mut undo = undo.lock().await;
             match undo.put_back(side, &item.dst).await {
                 Ok(()) if undo.is_empty() => rep.lock().unwrap().progress.backup_id = None,
                 Ok(()) => {}
@@ -485,7 +483,7 @@ async fn run_job(
     policy: Conflict,
     ctl: &Ctl,
     rep: &SharedReporter,
-    undo: &mut Recorder,
+    undo: &Recorder,
 ) -> AppResult<()> {
     let dest = {
         let mut rep = rep.lock().unwrap();
@@ -493,7 +491,11 @@ async fn run_job(
         rep.progress.dest.clone()
     };
     let items = match direction {
-        Direction::Upload => scan_local(source, &dest)?,
+        // A big local tree (node_modules) takes a while to walk: not on an async worker.
+        Direction::Upload => {
+            let (source, dest) = (source.to_string(), dest.clone());
+            tauri::async_runtime::spawn_blocking(move || scan_local(&source, &dest)).await.map_err(AppError::other)??
+        }
         Direction::Download => scan_remote(session, source, Path::new(&dest)).await?,
     };
     {
@@ -508,14 +510,13 @@ async fn run_job(
 
     // Small files are dominated by round trips, so copy several at once.
     let parallel = session.fs()?.parallel_files();
-    let undo = tokio::sync::Mutex::new(undo);
     let mut files = items.iter().filter(|i| !i.is_dir);
     let mut running = FuturesUnordered::new();
     let mut failure = None;
     loop {
         while failure.is_none() && running.len() < parallel {
             let Some(item) = files.next() else { break };
-            running.push(transfer_file(session, direction, item, policy, &listings, ctl, rep, &undo));
+            running.push(transfer_file(session, direction, item, policy, &listings, ctl, rep, undo));
         }
         // After a failure, let the files in flight finish (or clean up), then report the first error.
         match running.next().await {
@@ -622,7 +623,7 @@ async fn run_queued(
         Direction::Upload => backup::Side::Remote,
         Direction::Download => backup::Side::Local,
     };
-    let mut undo = Recorder::new(
+    let undo = Recorder::new(
         side,
         backup::Op::Overwrite,
         (direction == Direction::Upload).then_some(session),
@@ -635,7 +636,7 @@ async fn run_queued(
             }
         },
     );
-    let result = run_job(session, direction, source, policy, ctl, rep, &mut undo).await;
+    let result = run_job(session, direction, source, policy, ctl, rep, &undo).await;
     // Record the backup even after a failure: what was overwritten so far is in it.
     if let Err(e) = undo.commit() {
         eprintln!("kade: backup-index bijwerken mislukt: {e}");
@@ -716,9 +717,11 @@ mod tests {
             tokio::task::yield_now().await;
             r
         };
+        // Biased, watcher first: it sees each change before the job can finish.
         let result = tokio::select! {
-            r = job => r,
+            biased;
             never = ctl.report_pauses(&rep) => match never {},
+            r = job => r,
         };
         assert!(result.is_ok());
         let states = states.lock().unwrap().clone();

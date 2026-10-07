@@ -103,6 +103,21 @@ pub fn upsert(mut profile: ServerProfile) -> AppResult<ServerProfile> {
     })
 }
 
+/// Change one saved connection in a single store transaction, so an edit made
+/// elsewhere between reading and saving it isn't overwritten.
+pub fn modify(id: &str, f: impl FnOnce(&mut ServerProfile)) -> AppResult<ServerProfile> {
+    store::update(|data| {
+        let profile = data
+            .servers
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| AppError::other(tr!("Connection not found", "Server niet gevonden")))?;
+        f(profile);
+        profile.updated_at = store::now_ms();
+        Ok(profile.clone())
+    })
+}
+
 pub fn delete(id: &str) -> AppResult<()> {
     store::update(|data| {
         data.servers.retain(|p| p.id != id);

@@ -3,6 +3,7 @@
 //! the account they belong to: on a machine signed in to several accounts
 //! (work and personal), `op` would otherwise pick its default account.
 
+use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
@@ -99,7 +100,7 @@ pub async fn accounts() -> AppResult<Vec<OpAccount>> {
 pub async fn vaults(account: Option<&str>) -> AppResult<Vec<OpVault>> {
     let raw: Vec<RawVault> = serde_json::from_str(&op_raw(&["vault", "list", "--format", "json"], account).await?)?;
     let mut out: Vec<OpVault> = raw.into_iter().map(|v| OpVault { id: v.id, name: v.name }).collect();
-    out.sort_by_key(|v| v.name.to_lowercase());
+    out.sort_by_cached_key(|v| v.name.to_lowercase());
     Ok(out)
 }
 
@@ -121,7 +122,7 @@ pub async fn items(account: Option<&str>, vault: Option<&str>) -> AppResult<Vec<
             url: i.urls.into_iter().next().map(|u| u.href),
         })
         .collect();
-    out.sort_by_key(|i| i.title.to_lowercase());
+    out.sort_by_cached_key(|i| i.title.to_lowercase());
     Ok(out)
 }
 
@@ -132,21 +133,28 @@ pub async fn ssh_keys(account: Option<&str>, vault: Option<&str>) -> AppResult<V
         args.extend(["--vault", v]);
     }
     let listed: Vec<RawItem> = serde_json::from_str(&op_raw(&args, account).await?)?;
-    let mut out = Vec::new();
-    for item in listed {
-        // Only the public fingerprint field; the private key stays in 1Password.
-        let fp =
-            op_raw(&["item", "get", &item.id, "--vault", &item.vault.id, "--fields", "fingerprint"], account).await.unwrap_or_default();
-        out.push(OpSshKey {
-            item: format!("op://{}/{}", item.vault.id, item.id),
-            title: item.title,
-            vault: item.vault.name,
-            vault_id: item.vault.id,
-            fingerprint: fp.trim().to_string(),
-        });
+    // One `op` call per key. The first may have to unlock 1Password, so it
+    // runs alone; the rest then run a few at a time.
+    let mut out = Vec::with_capacity(listed.len());
+    let mut items = listed.into_iter();
+    if let Some(first) = items.next() {
+        out.push(ssh_key(first, account).await);
     }
-    out.sort_by_key(|k| k.title.to_lowercase());
+    out.extend(stream::iter(items).map(|item| ssh_key(item, account)).buffer_unordered(4).collect::<Vec<_>>().await);
+    out.sort_by_cached_key(|k| k.title.to_lowercase());
     Ok(out)
+}
+
+async fn ssh_key(item: RawItem, account: Option<&str>) -> OpSshKey {
+    // Only the public fingerprint field; the private key stays in 1Password.
+    let fp = op_raw(&["item", "get", &item.id, "--vault", &item.vault.id, "--fields", "fingerprint"], account).await.unwrap_or_default();
+    OpSshKey {
+        item: format!("op://{}/{}", item.vault.id, item.id),
+        title: item.title,
+        vault: item.vault.name,
+        vault_id: item.vault.id,
+        fingerprint: fp.trim().to_string(),
+    }
 }
 
 fn check_reference(reference: &str) -> AppResult<()> {

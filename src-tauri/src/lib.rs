@@ -50,59 +50,62 @@ impl Sessions {
     }
 }
 
-#[tauri::command]
+// Commands that touch the disk or start a process are `async`: a plain
+// command runs on the main thread, so a slow (synced, network) folder would
+// freeze the window.
+#[tauri::command(async)]
 fn list_servers() -> AppResult<Vec<ServerProfile>> {
     profiles::list()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_server(profile: ServerProfile) -> AppResult<ServerProfile> {
     profiles::upsert(profile)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_detect() -> Vec<importer::Found> {
     importer::detect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_preview(source: importer::Source, path: String) -> AppResult<importer::Preview> {
     importer::preview(source, &path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_apply(profiles: Vec<ServerProfile>, workspace: String) -> AppResult<usize> {
     importer::apply(profiles, &workspace)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_server(id: String) -> AppResult<()> {
     profiles::delete(&id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_workspaces() -> AppResult<Vec<store::Workspace>> {
     Ok(store::load()?.workspaces_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_workspace(mut workspace: store::Workspace) -> AppResult<store::Workspace> {
     workspace::save(&mut workspace)?;
     Ok(workspace)
 }
 
 /// Delete a workspace; its connections move to `move_to` (another workspace id).
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_workspace(id: String, move_to: String) -> AppResult<()> {
     workspace::delete(&id, &move_to)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings() -> AppResult<store::Settings> {
     Ok(store::load()?.settings)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_settings(mut settings: store::Settings) -> AppResult<store::Settings> {
     settings.updated_at = store::now_ms();
     store::update(|data| {
@@ -111,12 +114,12 @@ fn save_settings(mut settings: store::Settings) -> AppResult<store::Settings> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_status() -> AppResult<store::SyncStatus> {
     store::status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_sync_dir(app: AppHandle, watcher: State<'_, watch::StoreWatcher>, dir: Option<String>) -> AppResult<store::SyncStatus> {
     let status = store::set_sync_dir(dir.map(std::path::PathBuf::from))?;
     watcher.restart(&app)?;
@@ -265,7 +268,7 @@ async fn remote_rename(sessions: State<'_, Sessions>, session_id: String, from: 
 #[tauri::command]
 async fn remote_delete(sessions: State<'_, Sessions>, session_id: String, paths: Vec<String>) -> AppResult<Option<backup::Transaction>> {
     let session = sessions.get(&session_id)?;
-    let mut undo =
+    let undo =
         backup::Recorder::new(backup::Side::Remote, backup::Op::Delete, Some(&session), delete_summary(&paths, &session.server_name));
     for path in &paths {
         // Clearing out Kade's own backup folder really deletes.
@@ -285,24 +288,24 @@ fn delete_summary(paths: &[String], place: &str) -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_mkdir(path: String) -> AppResult<()> {
     fs::mkdir(&path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_create_file(path: String) -> AppResult<()> {
     fs::create_file(&path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_rename(from: String, to: String) -> AppResult<()> {
     fs::rename(&from, &to)
 }
 
 #[tauri::command]
 async fn local_delete(paths: Vec<String>) -> AppResult<Option<backup::Transaction>> {
-    let mut undo = backup::Recorder::new(
+    let undo = backup::Recorder::new(
         backup::Side::Local,
         backup::Op::Delete,
         None,
@@ -334,10 +337,8 @@ fn set_language(language: String, remember: Option<String>) -> AppResult<()> {
     i18n::set(&language);
     if let Some(choice) = remember {
         let choice = if choice == "auto" { String::new() } else { choice };
-        let mut cfg = store::local_config()?;
-        if cfg.language != choice {
-            cfg.language = choice;
-            store::save_local(&cfg)?;
+        if store::local_config()?.language != choice {
+            store::update_local(|cfg| cfg.language = choice)?;
         }
     }
     Ok(())
@@ -353,7 +354,7 @@ fn get_language() -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_editor() -> AppResult<EditorChoice> {
     let automatic = match editors::omarchy_editor() {
         Some(name) => tr!("Omarchy editor ({name})", "Omarchy-editor ({name})", name = name),
@@ -362,7 +363,7 @@ fn get_editor() -> AppResult<EditorChoice> {
     Ok(EditorChoice { current: store::local_config()?.editor, automatic, options: editors::detect() })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_editor(editor: String) -> AppResult<()> {
     store::set_editor(&editor)
 }
@@ -403,7 +404,7 @@ fn edits_list(edits: State<'_, edit::Edits>) -> Vec<edit::EditInfo> {
 }
 
 /// Local files open straight in the editor; no syncing needed.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_local(path: String) -> AppResult<()> {
     edit::launch(&editor_setting(), std::path::Path::new(&path))
 }
@@ -424,16 +425,16 @@ fn mcp_status(mcp: State<'_, mcp::McpServer>) -> mcp::McpStatus {
 }
 
 #[tauri::command]
-fn mcp_set_enabled(app: AppHandle, mcp: State<'_, mcp::McpServer>, enabled: bool) -> AppResult<mcp::McpStatus> {
+async fn mcp_set_enabled(app: AppHandle, mcp: State<'_, mcp::McpServer>, enabled: bool) -> AppResult<mcp::McpStatus> {
     mcp::set_enabled(enabled)?;
-    mcp.apply(&app);
+    mcp.apply(&app).await;
     Ok(mcp.status())
 }
 
 #[tauri::command]
-fn mcp_regenerate_token(app: AppHandle, mcp: State<'_, mcp::McpServer>) -> AppResult<mcp::McpStatus> {
+async fn mcp_regenerate_token(app: AppHandle, mcp: State<'_, mcp::McpServer>) -> AppResult<mcp::McpStatus> {
     mcp::regenerate_token()?;
-    mcp.apply(&app);
+    mcp.apply(&app).await;
     Ok(mcp.status())
 }
 
@@ -457,7 +458,7 @@ async fn op_ssh_keys(account: Option<String>, vault: Option<String>) -> AppResul
     onepassword::ssh_keys(account.as_deref(), vault.as_deref()).await
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn backups_list() -> AppResult<Vec<backup::Transaction>> {
     backup::list()
 }
@@ -519,7 +520,7 @@ fn local_home() -> String {
     fs::home()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_list(path: String) -> AppResult<Vec<fs::Entry>> {
     fs::list(&path)
 }
@@ -566,7 +567,8 @@ pub fn run() {
             if let Err(e) = app.state::<watch::StoreWatcher>().restart(app.handle()) {
                 eprintln!("kade: can't watch the data folder: {e}");
             }
-            app.state::<mcp::McpServer>().apply(app.handle());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move { handle.state::<mcp::McpServer>().apply(&handle).await });
             // Expired local backups can go right away; server ones on next connect.
             tauri::async_runtime::spawn(async {
                 let days = store::load().map(|d| d.settings.backup_retention_days).unwrap_or(7);

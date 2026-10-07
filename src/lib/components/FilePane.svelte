@@ -27,10 +27,11 @@
     FilePen,
   } from "@lucide/svelte";
   import { tick } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { errorMessage, joinPath, type Entry, type FileOps, type Side, type Transaction } from "$lib/api";
   import { drag } from "$lib/drag.svelte";
-  import { locale, t, tn } from "$lib/i18n.svelte";
-  import { formatDate, formatSize, parentPath } from "$lib/format";
+  import { t, tn } from "$lib/i18n.svelte";
+  import { collator, formatDate, formatSize, parentPath } from "$lib/format";
 
   let {
     label,
@@ -82,16 +83,18 @@
   $effect(() => {
     showHidden = showHiddenDefault;
   });
-  let selected = $state(new Set<string>());
+  // Mutated in place, so a click only re-renders the rows whose state changed.
+  const selected = new SvelteSet<string>();
   let anchor = $state<number | null>(null);
   let history: string[] = [];
   let reloadTick = $state(0);
 
-  const visible = $derived(
-    entries
+  const visible = $derived.by(() => {
+    const byName = collator();
+    return entries
       .filter((e) => showHidden || !e.name.startsWith("."))
-      .toSorted((a, b) => Number(b.is_dir) - Number(a.is_dir) || a.name.localeCompare(b.name, locale())),
-  );
+      .toSorted((a, b) => Number(b.is_dir) - Number(a.is_dir) || byName.compare(a.name, b.name));
+  });
 
   const hiddenCount = $derived(showHidden ? 0 : entries.length - visible.length);
 
@@ -120,7 +123,8 @@
       .then((list) => {
         if (cancelled) return;
         entries = list;
-        selected = new Set(pendingSelect && list.some((e) => e.path === pendingSelect) ? [pendingSelect] : []);
+        selected.clear();
+        if (pendingSelect && list.some((e) => e.path === pendingSelect)) selected.add(pendingSelect);
         pendingSelect = null;
         anchor = null;
       })
@@ -140,20 +144,24 @@
     if (prev) path = prev;
   }
 
+  /** Make `path` the only selected item. */
+  function selectOnly(path: string) {
+    for (const p of selected) if (p !== path) selected.delete(p);
+    selected.add(path);
+  }
+
   function click(e: MouseEvent, entry: Entry, index: number) {
-    const next = new Set(selected);
     if (e.shiftKey && anchor != null) {
       const [a, b] = [Math.min(anchor, index), Math.max(anchor, index)];
-      for (const item of visible.slice(a, b + 1)) next.add(item.path);
+      for (const item of visible.slice(a, b + 1)) selected.add(item.path);
     } else if (e.ctrlKey || e.metaKey) {
-      next.has(entry.path) ? next.delete(entry.path) : next.add(entry.path);
+      if (selected.has(entry.path)) selected.delete(entry.path);
+      else selected.add(entry.path);
       anchor = index;
     } else {
-      next.clear();
-      next.add(entry.path);
+      selectOnly(entry.path);
       anchor = index;
     }
-    selected = next;
   }
 
   function open(entry: Entry) {
@@ -178,10 +186,10 @@
     e.preventDefault();
     e.stopPropagation();
     if (entry && !selected.has(entry.path)) {
-      selected = new Set([entry.path]);
+      selectOnly(entry.path);
       anchor = index;
     }
-    if (!entry) selected = new Set();
+    if (!entry) selected.clear();
     // Keep the menu inside the window.
     menu = { x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 260), entry };
   }
@@ -241,7 +249,11 @@
 
   async function copyPaths(paths: string[]) {
     menu = null;
-    await navigator.clipboard.writeText(paths.join("\n"));
+    try {
+      await navigator.clipboard.writeText(paths.join("\n"));
+    } catch (e) {
+      error = errorMessage(e);
+    }
   }
 
   function onPaneKey(e: KeyboardEvent) {
@@ -258,7 +270,7 @@
   function startDrag(e: PointerEvent, entry: Entry, index: number) {
     drag.arm(e, () => {
       if (!selected.has(entry.path)) {
-        selected = new Set([entry.path]);
+        selectOnly(entry.path);
         anchor = index;
       }
       return { side, sessionId, paths: visible.filter((v) => selected.has(v.path)).map((v) => v.path) };

@@ -118,6 +118,9 @@ impl Edit {
     /// Download the server copy over the local working copy.
     async fn fetch(&self) -> AppResult<()> {
         let (remote, local) = self.paths();
+        // Before reading: a change landing during the download then shows up as
+        // a conflict on save, instead of being overwritten unnoticed.
+        let baseline = self.server_state(&remote).await?;
         let fs = self.session.fs()?;
         let mut reader = fs.reader(&remote).await?;
         let mut content = Vec::new();
@@ -134,7 +137,7 @@ impl Edit {
         file.write_all(&content).await?;
         file.flush().await?;
         *self.uploaded_hash.lock().unwrap() = hash(&content);
-        *self.baseline.lock().unwrap() = self.server_state(&remote).await?;
+        *self.baseline.lock().unwrap() = baseline;
         Ok(())
     }
 
@@ -164,7 +167,7 @@ impl Edit {
 
         let fs = self.session.fs()?;
         // Keep the previous server version, as with every overwrite.
-        let mut undo =
+        let undo =
             Recorder::new(Side::Remote, Op::Overwrite, Some(&self.session), tr!("Edited: {remote}", "Bewerkt: {remote}", remote = remote));
         if fs.exists(&remote).await? {
             undo.stash(Some(&self.session), &remote).await?;
