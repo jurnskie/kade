@@ -32,6 +32,7 @@
   import { drag } from "$lib/drag.svelte";
   import { t, tn } from "$lib/i18n.svelte";
   import { collator, formatDate, formatSize, parentPath } from "$lib/format";
+  import Modal from "./Modal.svelte";
 
   let {
     label,
@@ -300,7 +301,7 @@
 <svelte:window
   onclick={() => (menu = null)}
   onblur={() => (menu = null)}
-  onkeydown={(e) => e.key === "Escape" && ((menu = null), (dialog = null))}
+  onkeydown={(e) => e.key === "Escape" && (menu = null)}
 />
 
 <!-- Focusable so Delete/F2/Enter work on the selection. -->
@@ -432,8 +433,7 @@
   {/if}
 
   {#if dialog}
-    <div class="scrim" role="presentation" onclick={() => (dialog = null)}></div>
-    <div class="dlg" role="dialog" aria-modal="true">
+    <Modal width={420} z={41} top="30%" blur={false} pad="18px 20px 16px" gap={10} onclose={() => (dialog = null)}>
       {#if dialog.kind === "delete"}
         <h3>{dialog.paths.length === 1 ? t("Delete?") : t("Delete {n} items?", { n: dialog.paths.length })}</h3>
         <p>
@@ -467,7 +467,7 @@
           {dialog.kind === "delete" ? t("Delete") : dialog.kind === "rename" ? t("Rename") : t("Create")}
         </button>
       </div>
-    </div>
+    </Modal>
   {/if}
 
   <footer class="pf">
@@ -536,46 +536,24 @@
     border-top: 1px solid var(--mist2);
     margin: 4px 2px;
   }
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    z-index: 41;
-  }
-  .dlg {
-    position: fixed;
-    left: 50%;
-    top: 30%;
-    transform: translateX(-50%);
-    width: min(420px, calc(100vw - 32px));
-    background: var(--paper);
-    border-radius: 14px;
-    padding: 18px 20px 16px;
-    box-shadow: var(--shadow-lg);
-    z-index: 42;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    user-select: text;
-  }
-  .dlg h3 {
+  h3 {
     font-size: 15px;
     font-weight: 600;
   }
-  .dlg p {
+  p {
     color: var(--ink2);
     line-height: 1.5;
     word-break: break-all;
   }
-  .dlg .where {
+  p.where {
     font-size: 11.5px;
     color: var(--lichen);
   }
-  .dlg .err {
+  p.err {
     color: var(--danger);
     font-size: 12.5px;
   }
-  .dlg input {
+  input {
     height: 36px;
     border: 1px solid var(--pine);
     box-shadow: 0 0 0 3px var(--pine-t);

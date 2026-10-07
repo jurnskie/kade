@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as pickPath } from "@tauri-apps/plugin-dialog";
-  import { Import, X, FileSearch, FolderOpen, ArrowLeft, TriangleAlert } from "@lucide/svelte";
+  import { Import, FileSearch, FolderOpen, ArrowLeft, TriangleAlert } from "@lucide/svelte";
   import { api, errorMessage, type Auth, type ImportFound, type ImportPreview, type ImportSource, type Workspace } from "$lib/api";
   import { t, tn } from "$lib/i18n.svelte";
+  import Modal from "./Modal.svelte";
 
   let {
     workspaces,
@@ -111,19 +112,18 @@
   const authLabel = (a: Auth) => (a.method === "key_file" ? t("Key file") : t("Password"));
 </script>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />
-
-<div class="scrim" role="presentation" onclick={onclose}></div>
-<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="imp-title">
-  <div class="sh">
-    {#if preview}
-      <button class="x back" onclick={() => ((preview = null), (error = null))} aria-label={t("Back")}><ArrowLeft size={16} /></button>
-    {:else}
-      <Import size={18} color="var(--pine)" />
-    {/if}
-    <h1 id="imp-title">{preview ? t("Import from {app}", { app: label }) : t("Import connections")}</h1>
-    <button class="x" onclick={onclose} aria-label={t("Close")}><X size={16} /></button>
-  </div>
+<Modal width={560} z={20} pad="18px 20px 16px" gap={12} labelledby="imp-title" {onclose}>
+  {#snippet header(close)}
+    <div class="sh">
+      {#if preview}
+        <button class="back" onclick={() => ((preview = null), (error = null))} aria-label={t("Back")}><ArrowLeft size={16} /></button>
+      {:else}
+        <Import size={18} color="var(--pine)" />
+      {/if}
+      <h1 id="imp-title">{preview ? t("Import from {app}", { app: label }) : t("Import connections")}</h1>
+      {@render close()}
+    </div>
+  {/snippet}
 
   {#if !preview}
     <div class="apps" role="tablist">
@@ -228,32 +228,9 @@
       </button>
     </div>
   {/if}
-</div>
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    backdrop-filter: blur(3px);
-    z-index: 20;
-  }
-  .sheet {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: min(560px, calc(100vw - 32px));
-    max-height: calc(100vh - 32px);
-    background: var(--paper);
-    border-radius: 14px;
-    box-shadow: var(--shadow-lg);
-    z-index: 21;
-    padding: 18px 20px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
   .sh {
     display: flex;
     align-items: center;
@@ -263,16 +240,13 @@
     font-size: 16px;
     font-weight: 600;
   }
-  .x {
-    margin-left: auto;
+  .back {
+    margin-left: -6px;
     padding: 6px;
     border-radius: 6px;
     display: grid;
   }
-  .x.back {
-    margin-left: -6px;
-  }
-  .x:hover {
+  .back:hover {
     background: var(--mist2);
   }
   .apps {

@@ -11,15 +11,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Semaphore};
 
 use crate::backup::{self, Recorder};
 use crate::error::{AppError, AppResult};
-use crate::remote::{Meta, RemoteFs};
+use crate::remote::{copy_chunks, Meta, RemoteFs};
 use crate::ssh::{join_remote, Session};
 
-const CHUNK: usize = 256 * 1024;
 const PARALLEL_JOBS: usize = 3;
 const EMIT_EVERY: Duration = Duration::from_millis(150);
 
@@ -323,6 +322,9 @@ impl Listings {
     }
 }
 
+/// The job's reporter, shared by the files that copy at the same time.
+type SharedReporter = Mutex<Reporter>;
+
 enum Decision {
     Skip,
     /// Copy; `replaces` means an existing destination gets backed up first.
@@ -331,216 +333,198 @@ enum Decision {
     },
 }
 
-async fn decide(session: &Session, direction: Direction, item: &Item, policy: Conflict, listings: &Listings) -> AppResult<Decision> {
-    let dst_mtime = match direction {
-        Direction::Upload => match listings.stat(session.fs()?, &item.dst).await? {
-            Some(m) => m.mtime,
-            None => return Ok(Decision::Copy { replaces: false }),
-        },
-        Direction::Download => match std::fs::metadata(&item.dst) {
-            Ok(m) => m.modified().ok().map(unix_secs),
-            Err(_) => return Ok(Decision::Copy { replaces: false }),
-        },
-    };
-    let tolerance = session.fs()?.mtime_tolerance();
-    let copy = match policy {
-        Conflict::Overwrite => true,
-        Conflict::Skip => false,
-        // Remote times can be coarse (FTP LIST: minutes), so allow that much slack.
-        Conflict::Newer => dst_mtime.is_none_or(|d| item.mtime > d + tolerance),
-    };
-    Ok(if copy { Decision::Copy { replaces: true } } else { Decision::Skip })
-}
-
-/// The job's reporter, shared by the files that copy at the same time.
-type SharedReporter = Mutex<Reporter>;
-
-async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &Ctl, rep: &SharedReporter) -> AppResult<()> {
-    let fs = session.fs()?;
-    let mut buf = vec![0u8; CHUNK];
-    match direction {
-        Direction::Upload => {
-            let mut src = tokio::fs::File::open(&item.src).await?;
-            let mut dst = fs.writer(&item.dst).await?;
-            loop {
-                ctl.checkpoint().await?;
-                let n = src.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                dst.write_all(&buf[..n]).await?;
-                rep.lock().unwrap().add_bytes(n as u64);
-            }
-            dst.finish().await?;
-            // Keep the source's modification time, so "only newer" works both ways.
-            fs.set_mtime(&item.dst, item.mtime).await;
-        }
-        Direction::Download => {
-            let mut src = fs.reader(&item.src).await?;
-            let mut dst = tokio::fs::File::create(&item.dst).await?;
-            loop {
-                ctl.checkpoint().await?;
-                let n = src.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                dst.write_all(&buf[..n]).await?;
-                rep.lock().unwrap().add_bytes(n as u64);
-            }
-            src.finish().await?;
-            dst.flush().await?;
-            let dst = dst.into_std().await;
-            let _ = dst.set_modified(UNIX_EPOCH + Duration::from_secs(item.mtime.max(0) as u64));
-        }
-    }
-    Ok(())
-}
-
-/// Create the job's directories, parents first. For uploads, also list the
-/// ones that already exist so the files can be checked without a request each.
-async fn make_dirs(session: &Session, direction: Direction, items: &[Item], ctl: &Ctl) -> AppResult<Listings> {
-    let mut listings = Listings::default();
-    for item in items.iter().filter(|i| i.is_dir) {
-        ctl.checkpoint().await?;
-        match direction {
-            Direction::Upload => {
-                let fs = session.fs()?;
-                if listings.stat(fs, &item.dst).await?.is_some() {
-                    listings.add_dir(fs, &item.dst).await?;
-                } else {
-                    fs.mkdir(&item.dst).await?;
-                    listings.dirs.insert(item.dst.clone());
-                }
-            }
-            Direction::Download => std::fs::create_dir_all(&item.dst)?,
-        }
-    }
-    Ok(listings)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn transfer_file(
-    session: &Session,
+/// One running job: what its files share while they copy.
+struct Job<'a> {
+    session: &'a Session,
     direction: Direction,
-    item: &Item,
     policy: Conflict,
-    listings: &Listings,
-    ctl: &Ctl,
-    rep: &SharedReporter,
-    undo: &Recorder,
-) -> AppResult<()> {
-    ctl.checkpoint().await?;
-    let side = match direction {
-        Direction::Upload => Some(session),
-        Direction::Download => None,
-    };
-    let replaces = match decide(session, direction, item, policy, listings).await? {
-        Decision::Skip => {
-            let mut rep = rep.lock().unwrap();
-            rep.progress.skipped += 1;
-            rep.progress.bytes_total -= item.size;
-            return Ok(());
-        }
-        Decision::Copy { replaces } => replaces,
-    };
-    if replaces {
-        // The listing already says what the destination is; no lock either, so
-        // overwrites run as parallel as the copies.
-        let is_dir = listings.entries.get(&item.dst).map(|m| m.is_dir && !m.is_symlink);
-        undo.stash_known(side, &item.dst, is_dir).await?;
-        rep.lock().unwrap().progress.backup_id = Some(undo.id().to_string());
+    ctl: &'a Ctl,
+    rep: &'a SharedReporter,
+    /// Collects what the job overwrites.
+    undo: &'a Recorder,
+}
+
+impl Job<'_> {
+    async fn decide(&self, item: &Item, listings: &Listings) -> AppResult<Decision> {
+        let session = self.session;
+        let dst_mtime = match self.direction {
+            Direction::Upload => match listings.stat(session.fs()?, &item.dst).await? {
+                Some(m) => m.mtime,
+                None => return Ok(Decision::Copy { replaces: false }),
+            },
+            Direction::Download => match std::fs::metadata(&item.dst) {
+                Ok(m) => m.modified().ok().map(unix_secs),
+                Err(_) => return Ok(Decision::Copy { replaces: false }),
+            },
+        };
+        let tolerance = session.fs()?.mtime_tolerance();
+        let copy = match self.policy {
+            Conflict::Overwrite => true,
+            Conflict::Skip => false,
+            // Remote times can be coarse (FTP LIST: minutes), so allow that much slack.
+            Conflict::Newer => dst_mtime.is_none_or(|d| item.mtime > d + tolerance),
+        };
+        Ok(if copy { Decision::Copy { replaces: true } } else { Decision::Skip })
     }
-    if let Err(e) = copy_file(session, direction, item, ctl, rep).await {
-        // Don't leave a half-written file behind.
-        match direction {
+
+    async fn copy_file(&self, item: &Item) -> AppResult<()> {
+        let fs = self.session.fs()?;
+        let progress = |n: usize| {
+            self.rep.lock().unwrap().add_bytes(n as u64);
+            self.ctl.checkpoint()
+        };
+        match self.direction {
             Direction::Upload => {
-                let _ = session.fs()?.remove_file(&item.dst).await;
+                let mut src = tokio::fs::File::open(&item.src).await?;
+                let mut dst = fs.writer(&item.dst).await?;
+                copy_chunks(&mut src, &mut dst, progress).await?;
+                dst.finish().await?;
+                // Keep the source's modification time, so "only newer" works both ways.
+                fs.set_mtime(&item.dst, item.mtime).await;
             }
             Direction::Download => {
-                let _ = std::fs::remove_file(&item.dst);
+                let mut src = fs.reader(&item.src).await?;
+                let mut dst = tokio::fs::File::create(&item.dst).await?;
+                copy_chunks(&mut src, &mut dst, progress).await?;
+                src.finish().await?;
+                dst.flush().await?;
+                let dst = dst.into_std().await;
+                let _ = dst.set_modified(UNIX_EPOCH + Duration::from_secs(item.mtime.max(0) as u64));
             }
         }
-        // And put back the file it was replacing.
-        if replaces {
-            match undo.put_back(side, &item.dst).await {
-                Ok(()) if undo.is_empty() => rep.lock().unwrap().progress.backup_id = None,
-                Ok(()) => {}
-                Err(err) => eprintln!("kade: restoring {} failed, it stays in the backup: {err}", item.dst),
-            }
-        }
-        return Err(e);
+        Ok(())
     }
-    let mut rep = rep.lock().unwrap();
-    rep.progress.files_done += 1;
-    rep.emit();
-    Ok(())
+
+    /// Create the job's directories, parents first. For uploads, also list the
+    /// ones that already exist so the files can be checked without a request each.
+    async fn make_dirs(&self, items: &[Item]) -> AppResult<Listings> {
+        let mut listings = Listings::default();
+        for item in items.iter().filter(|i| i.is_dir) {
+            self.ctl.checkpoint().await?;
+            match self.direction {
+                Direction::Upload => {
+                    let fs = self.session.fs()?;
+                    if listings.stat(fs, &item.dst).await?.is_some() {
+                        listings.add_dir(fs, &item.dst).await?;
+                    } else {
+                        fs.mkdir(&item.dst).await?;
+                        listings.dirs.insert(item.dst.clone());
+                    }
+                }
+                Direction::Download => std::fs::create_dir_all(&item.dst)?,
+            }
+        }
+        Ok(listings)
+    }
+
+    async fn transfer_file(&self, item: &Item, listings: &Listings) -> AppResult<()> {
+        let (session, rep, undo) = (self.session, self.rep, self.undo);
+        self.ctl.checkpoint().await?;
+        let side = match self.direction {
+            Direction::Upload => Some(session),
+            Direction::Download => None,
+        };
+        let replaces = match self.decide(item, listings).await? {
+            Decision::Skip => {
+                let mut rep = rep.lock().unwrap();
+                rep.progress.skipped += 1;
+                rep.progress.bytes_total -= item.size;
+                return Ok(());
+            }
+            Decision::Copy { replaces } => replaces,
+        };
+        if replaces {
+            // The listing already says what the destination is; no lock either, so
+            // overwrites run as parallel as the copies.
+            let is_dir = listings.entries.get(&item.dst).map(|m| m.is_dir && !m.is_symlink);
+            undo.stash_known(side, &item.dst, is_dir).await?;
+            rep.lock().unwrap().progress.backup_id = Some(undo.id().to_string());
+        }
+        if let Err(e) = self.copy_file(item).await {
+            // Don't leave a half-written file behind.
+            match self.direction {
+                Direction::Upload => {
+                    let _ = session.fs()?.remove_file(&item.dst).await;
+                }
+                Direction::Download => {
+                    let _ = std::fs::remove_file(&item.dst);
+                }
+            }
+            // And put back the file it was replacing.
+            if replaces {
+                match undo.put_back(side, &item.dst).await {
+                    Ok(()) if undo.is_empty() => rep.lock().unwrap().progress.backup_id = None,
+                    Ok(()) => {}
+                    Err(err) => eprintln!("kade: restoring {} failed, it stays in the backup: {err}", item.dst),
+                }
+            }
+            return Err(e);
+        }
+        let mut rep = rep.lock().unwrap();
+        rep.progress.files_done += 1;
+        rep.emit();
+        Ok(())
+    }
+
+    async fn run(&self, source: &str) -> AppResult<()> {
+        let (session, direction) = (self.session, self.direction);
+        let dest = {
+            let mut rep = self.rep.lock().unwrap();
+            rep.state(JobState::Scanning);
+            rep.progress.dest.clone()
+        };
+        let items = match direction {
+            // A big local tree (node_modules) takes a while to walk: not on an async worker.
+            Direction::Upload => {
+                let (source, dest) = (source.to_string(), dest.clone());
+                tauri::async_runtime::spawn_blocking(move || scan_local(&source, &dest)).await.map_err(AppError::other)??
+            }
+            Direction::Download => scan_remote(session, source, Path::new(&dest)).await?,
+        };
+        {
+            let mut rep = self.rep.lock().unwrap();
+            rep.progress.files_total = items.iter().filter(|i| !i.is_dir).count() as u64;
+            rep.progress.bytes_total = items.iter().map(|i| i.size).sum();
+            rep.state(JobState::Running);
+        }
+
+        // Scanning pushes parents before children, so this creates them in order.
+        let listings = self.make_dirs(&items).await?;
+
+        // Small files are dominated by round trips, so copy several at once.
+        let parallel = session.fs()?.parallel_files();
+        let mut files = items.iter().filter(|i| !i.is_dir);
+        let mut running = FuturesUnordered::new();
+        let mut failure = None;
+        loop {
+            while failure.is_none() && running.len() < parallel {
+                let Some(item) = files.next() else { break };
+                running.push(self.transfer_file(item, &listings));
+            }
+            // After a failure, let the files in flight finish (or clean up), then report the first error.
+            match running.next().await {
+                Some(Err(e)) => {
+                    failure.get_or_insert(e);
+                }
+                Some(Ok(())) => {}
+                None => break,
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
 }
 
-async fn run_job(
-    session: &Session,
-    direction: Direction,
-    source: &str,
-    policy: Conflict,
-    ctl: &Ctl,
-    rep: &SharedReporter,
-    undo: &Recorder,
-) -> AppResult<()> {
-    let dest = {
-        let mut rep = rep.lock().unwrap();
-        rep.state(JobState::Scanning);
-        rep.progress.dest.clone()
-    };
-    let items = match direction {
-        // A big local tree (node_modules) takes a while to walk: not on an async worker.
-        Direction::Upload => {
-            let (source, dest) = (source.to_string(), dest.clone());
-            tauri::async_runtime::spawn_blocking(move || scan_local(&source, &dest)).await.map_err(AppError::other)??
-        }
-        Direction::Download => scan_remote(session, source, Path::new(&dest)).await?,
-    };
-    {
-        let mut rep = rep.lock().unwrap();
-        rep.progress.files_total = items.iter().filter(|i| !i.is_dir).count() as u64;
-        rep.progress.bytes_total = items.iter().map(|i| i.size).sum();
-        rep.state(JobState::Running);
-    }
-
-    // Scanning pushes parents before children, so this creates them in order.
-    let listings = make_dirs(session, direction, &items, ctl).await?;
-
-    // Small files are dominated by round trips, so copy several at once.
-    let parallel = session.fs()?.parallel_files();
-    let mut files = items.iter().filter(|i| !i.is_dir);
-    let mut running = FuturesUnordered::new();
-    let mut failure = None;
-    loop {
-        while failure.is_none() && running.len() < parallel {
-            let Some(item) = files.next() else { break };
-            running.push(transfer_file(session, direction, item, policy, &listings, ctl, rep, undo));
-        }
-        // After a failure, let the files in flight finish (or clean up), then report the first error.
-        match running.next().await {
-            Some(Err(e)) => {
-                failure.get_or_insert(e);
-            }
-            Some(Ok(())) => {}
-            None => break,
-        }
-    }
-    failure.map_or(Ok(()), Err)
+/// What the user asked to copy: each source into `dest_dir`.
+pub struct JobSpec {
+    pub direction: Direction,
+    pub sources: Vec<String>,
+    pub dest_dir: String,
+    pub policy: Conflict,
 }
 
 /// Queue one job per source. Returns the job ids immediately.
-pub fn start(
-    emit: Emit,
-    transfers: Arc<Transfers>,
-    session: Arc<Session>,
-    session_id: String,
-    direction: Direction,
-    sources: Vec<String>,
-    dest_dir: String,
-    policy: Conflict,
-) -> Vec<String> {
+pub fn start(emit: Emit, transfers: Arc<Transfers>, session: Arc<Session>, session_id: String, spec: JobSpec) -> Vec<String> {
+    let JobSpec { direction, sources, dest_dir, policy } = spec;
     let mut ids = Vec::new();
     for source in sources {
         let id = uuid::Uuid::new_v4().to_string();
@@ -636,7 +620,7 @@ async fn run_queued(
             }
         },
     );
-    let result = run_job(session, direction, source, policy, ctl, rep, &undo).await;
+    let result = Job { session, direction, policy, ctl, rep, undo: &undo }.run(source).await;
     // Record the backup even after a failure: what was overwritten so far is in it.
     if let Err(e) = undo.commit() {
         eprintln!("kade: backup-index bijwerken mislukt: {e}");

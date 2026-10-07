@@ -22,10 +22,7 @@ async fn run(session: &Arc<Session>, direction: Direction, source: &Path, dest: 
         Arc::new(Transfers::default()),
         session.clone(),
         "e2e".into(),
-        direction,
-        vec![source.to_string_lossy().into()],
-        dest.to_string_lossy().into(),
-        policy,
+        transfer::JobSpec { direction, sources: vec![source.to_string_lossy().into()], dest_dir: dest.to_string_lossy().into(), policy },
     );
     while let Some(p) = rx.recv().await {
         if matches!(p.state, JobState::Done | JobState::Failed | JobState::Cancelled) {

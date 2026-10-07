@@ -2,17 +2,23 @@
 //! deleting and backups don't care which protocol a server speaks.
 
 use std::collections::HashSet;
+use std::future::{self, Future};
+use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::fs::File as SftpFile;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::fs::{format_mode, Entry};
 use crate::ftp::{Ftp, FtpTransfer};
 use crate::ssh::join_remote;
+
+const CHUNK: usize = 256 * 1024;
 
 /// What the transfer and backup code needs to know about a remote item.
 #[derive(Debug, Clone)]
@@ -38,14 +44,16 @@ pub enum RemoteWriter {
     Ftp(FtpTransfer),
 }
 
-impl RemoteReader {
-    pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            RemoteReader::Sftp(f) => f.read(buf).await,
-            RemoteReader::Ftp(t) => t.read(buf).await,
+impl AsyncRead for RemoteReader {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            RemoteReader::Sftp(f) => Pin::new(f).poll_read(cx, buf),
+            RemoteReader::Ftp(t) => Pin::new(t).poll_read(cx, buf),
         }
     }
+}
 
+impl RemoteReader {
     pub async fn finish(self) -> AppResult<()> {
         match self {
             RemoteReader::Sftp(_) => Ok(()),
@@ -54,20 +62,62 @@ impl RemoteReader {
     }
 }
 
-impl RemoteWriter {
-    pub async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        match self {
-            RemoteWriter::Sftp(f) => f.write_all(buf).await,
-            RemoteWriter::Ftp(t) => t.write_all(buf).await,
+impl AsyncWrite for RemoteWriter {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            RemoteWriter::Sftp(f) => Pin::new(f).poll_write(cx, buf),
+            RemoteWriter::Ftp(t) => Pin::new(t).poll_write(cx, buf),
         }
     }
 
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            RemoteWriter::Sftp(f) => Pin::new(f).poll_flush(cx),
+            RemoteWriter::Ftp(t) => Pin::new(t).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            RemoteWriter::Sftp(f) => Pin::new(f).poll_shutdown(cx),
+            RemoteWriter::Ftp(t) => Pin::new(t).poll_shutdown(cx),
+        }
+    }
+}
+
+impl RemoteWriter {
     pub async fn finish(self) -> AppResult<()> {
         match self {
             RemoteWriter::Sftp(mut f) => Ok(f.shutdown().await?),
             RemoteWriter::Ftp(t) => t.finish().await,
         }
     }
+}
+
+/// Copy `src` into `dst` in large chunks; `after` runs once per chunk with its
+/// size (progress), and can wait (pause) or stop the copy with an error (cancel).
+// A plain closure returning a future, not an async closure: those break the
+// `Send` check of the spawned transfer job.
+pub async fn copy_chunks<R, W, F>(src: &mut R, dst: &mut W, mut after: impl FnMut(usize) -> F) -> AppResult<()>
+where
+    R: AsyncRead + Unpin + ?Sized,
+    W: AsyncWrite + Unpin + ?Sized,
+    F: Future<Output = AppResult<()>>,
+{
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = src.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        dst.write_all(&buf[..n]).await?;
+        after(n).await?;
+    }
+}
+
+/// For `copy_chunks` without anything to do between chunks.
+pub fn no_op(_: usize) -> future::Ready<AppResult<()>> {
+    future::ready(Ok(()))
 }
 
 fn meta_from_sftp(m: &FileAttributes) -> Meta {

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Layers, X, Trash2, Check } from "@lucide/svelte";
+  import { Layers, Trash2, Check } from "@lucide/svelte";
   import { api, errorMessage, type OpAccount, type Workspace } from "$lib/api";
   import { WORKSPACE_COLORS } from "$lib/workspaces";
   import OnePasswordIcon from "./OnePasswordIcon.svelte";
+  import Modal from "./Modal.svelte";
   import { t, tn } from "$lib/i18n.svelte";
 
   let {
@@ -76,15 +77,14 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />
-
-<div class="scrim" role="presentation" onclick={onclose}></div>
-<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ws-title">
-  <div class="sh">
-    <Layers size={18} color="var(--pine)" />
-    <h1 id="ws-title">{start ? t("Edit workspace") : t("New workspace")}</h1>
-    <button class="x" onclick={onclose} aria-label={t("Close")}><X size={16} /></button>
-  </div>
+<Modal width={440} z={20} pad="18px 20px 16px" gap={14} labelledby="ws-title" {onclose}>
+  {#snippet header(close)}
+    <div class="sh">
+      <Layers size={18} color="var(--pine)" />
+      <h1 id="ws-title">{start ? t("Edit workspace") : t("New workspace")}</h1>
+      {@render close()}
+    </div>
+  {/snippet}
 
   <label class="f">
     <span>{t("Name")}</span>
@@ -147,31 +147,9 @@
       <button class="btn pri" disabled={busy || !name.trim()} onclick={save}>{start ? t("Save") : t("Create")}</button>
     </div>
   {/if}
-</div>
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    backdrop-filter: blur(3px);
-    z-index: 20;
-  }
-  .sheet {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: min(440px, calc(100vw - 32px));
-    background: var(--paper);
-    border-radius: 14px;
-    box-shadow: var(--shadow-lg);
-    z-index: 21;
-    padding: 18px 20px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
   .sh {
     display: flex;
     align-items: center;
@@ -180,14 +158,6 @@
   h1 {
     font-size: 16px;
     font-weight: 600;
-  }
-  .x {
-    margin-left: auto;
-    padding: 6px;
-    border-radius: 6px;
-  }
-  .x:hover {
-    background: var(--mist2);
   }
   .f {
     display: flex;

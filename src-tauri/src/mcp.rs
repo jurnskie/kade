@@ -14,10 +14,10 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, IntoContents, ServerCapabilities, ServerConfig};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::{schemars, tool, tool_handler, tool_router, ServerHandler};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
@@ -184,17 +184,34 @@ fn out(p: &ServerProfile) -> ConnectionOut<'_> {
     }
 }
 
-fn json(value: impl Serialize) -> Result<CallToolResult, McpError> {
+/// A tool-level failure: reported to the model as a result, not a protocol
+/// error. Any error converts, so tools can use `?`.
+struct Failed(String);
+
+impl<E: std::fmt::Display> From<E> for Failed {
+    fn from(e: E) -> Self {
+        Failed(e.to_string())
+    }
+}
+
+impl IntoContents for Failed {
+    fn into_contents(self) -> Vec<ContentBlock> {
+        vec![ContentBlock::text(self.0)]
+    }
+}
+
+type ToolResult = Result<CallToolResult, Failed>;
+
+fn json(value: impl Serialize) -> ToolResult {
     Ok(CallToolResult::success(vec![ContentBlock::json(value)?]))
 }
 
-fn text(msg: impl Into<String>) -> Result<CallToolResult, McpError> {
+fn text(msg: impl Into<String>) -> ToolResult {
     Ok(CallToolResult::success(vec![ContentBlock::text(msg.into())]))
 }
 
-/// Tool-level failures are reported to the model as results, not protocol errors.
-fn failed(e: impl std::fmt::Display) -> Result<CallToolResult, McpError> {
-    Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]))
+fn failed(e: impl std::fmt::Display) -> ToolResult {
+    Err(e.into())
 }
 
 fn default_port(protocol: Protocol) -> u16 {
@@ -251,11 +268,8 @@ impl KadeMcp {
     }
 
     #[tool(description = "List the workspaces (e.g. Home, Work), each with its default 1Password account and number of connections.")]
-    async fn list_workspaces(&self) -> Result<CallToolResult, McpError> {
-        let data = match store::load() {
-            Ok(d) => d,
-            Err(e) => return failed(e),
-        };
+    async fn list_workspaces(&self) -> ToolResult {
+        let data = store::load()?;
         json(
             data.workspaces_or_default()
                 .iter()
@@ -268,15 +282,10 @@ impl KadeMcp {
     }
 
     #[tool(description = "List groups with how many connections each has, optionally within one workspace.")]
-    async fn list_groups(&self, Parameters(p): Parameters<WorkspaceFilter>) -> Result<CallToolResult, McpError> {
-        let ws = match p.workspace.as_deref().map(|w| resolve_workspace(Some(w))).transpose() {
-            Ok(w) => w,
-            Err(e) => return failed(e),
-        };
-        let servers: Vec<ServerProfile> = match profiles::list() {
-            Ok(s) => s.into_iter().filter(|s| ws.as_deref().is_none_or(|w| in_workspace(s, w))).collect(),
-            Err(e) => return failed(e),
-        };
+    async fn list_groups(&self, Parameters(p): Parameters<WorkspaceFilter>) -> ToolResult {
+        let ws = p.workspace.as_deref().map(|w| resolve_workspace(Some(w))).transpose()?;
+        let servers: Vec<ServerProfile> =
+            profiles::list()?.into_iter().filter(|s| ws.as_deref().is_none_or(|w| in_workspace(s, w))).collect();
         let mut groups: Vec<(String, usize)> = Vec::new();
         for s in &servers {
             match groups.iter_mut().find(|(g, _)| *g == s.group) {
@@ -295,16 +304,10 @@ impl KadeMcp {
     #[tool(
         description = "List connections (servers and sites), optionally only one group. A 'site' is a connection whose remote_path points at the site's folder."
     )]
-    async fn list_connections(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
-        let servers = match profiles::list() {
-            Ok(s) => s,
-            Err(e) => return failed(e),
-        };
+    async fn list_connections(&self, Parameters(p): Parameters<ListParams>) -> ToolResult {
+        let servers = profiles::list()?;
         let wanted = p.group.map(|g| g.to_lowercase());
-        let ws = match p.workspace.as_deref().map(|w| resolve_workspace(Some(w))).transpose() {
-            Ok(w) => w,
-            Err(e) => return failed(e),
-        };
+        let ws = p.workspace.as_deref().map(|w| resolve_workspace(Some(w))).transpose()?;
         json(
             servers
                 .iter()
@@ -318,12 +321,9 @@ impl KadeMcp {
     #[tool(
         description = "Add a connection to Kade. Several sites on one server are separate connections with the same host/user/auth and their own remote_path, usually in a group named after the server. Returns the new connection; if an identical one exists, returns that instead."
     )]
-    async fn add_connection(&self, Parameters(p): Parameters<NewConnection>) -> Result<CallToolResult, McpError> {
+    async fn add_connection(&self, Parameters(p): Parameters<NewConnection>) -> ToolResult {
         let port = p.port.unwrap_or_else(|| default_port(p.protocol));
-        let workspace = match resolve_workspace(p.workspace.as_deref()) {
-            Ok(w) => w,
-            Err(e) => return failed(e),
-        };
+        let workspace = resolve_workspace(p.workspace.as_deref())?;
         let remote_path = blank_to_none(p.remote_path);
         if let Ok(existing) = profiles::list() {
             if let Some(dup) = existing
@@ -348,22 +348,15 @@ impl KadeMcp {
             tunnels: Vec::new(),
             updated_at: 0,
         };
-        match profiles::upsert(profile) {
-            Ok(saved) => {
-                self.changed();
-                json(serde_json::json!({ "added": out(&saved) }))
-            }
-            Err(e) => failed(e),
-        }
+        let saved = profiles::upsert(profile)?;
+        self.changed();
+        json(serde_json::json!({ "added": out(&saved) }))
     }
 
     #[tool(description = "Change fields of an existing connection; omitted fields stay as they are.")]
-    async fn update_connection(&self, Parameters(p): Parameters<UpdateConnection>) -> Result<CallToolResult, McpError> {
+    async fn update_connection(&self, Parameters(p): Parameters<UpdateConnection>) -> ToolResult {
         // Resolved up front: the store is locked while the change is applied.
-        let workspace = match p.workspace.as_deref().map(|v| resolve_workspace(Some(v))).transpose() {
-            Ok(w) => w,
-            Err(e) => return failed(e),
-        };
+        let workspace = p.workspace.as_deref().map(|v| resolve_workspace(Some(v))).transpose()?;
         let result = profiles::modify(&p.id, |c| {
             if let Some(v) = p.name {
                 c.name = v.trim().into();
@@ -396,32 +389,21 @@ impl KadeMcp {
                 c.local_path = blank_to_none(p.local_path);
             }
         });
-        match result {
-            Ok(saved) => {
-                self.changed();
-                json(serde_json::json!({ "updated": out(&saved) }))
-            }
-            Err(e) => failed(e),
-        }
+        let saved = result?;
+        self.changed();
+        json(serde_json::json!({ "updated": out(&saved) }))
     }
 
     #[tool(description = "Delete a connection from Kade (only the saved connection; nothing on the server is touched).")]
-    async fn delete_connection(&self, Parameters(p): Parameters<IdParam>) -> Result<CallToolResult, McpError> {
-        let c = match self.find(&p.id) {
-            Ok(c) => c,
-            Err(e) => return failed(e),
-        };
-        match profiles::delete(&p.id) {
-            Ok(()) => {
-                self.changed();
-                text(format!("Connection '{}' removed from Kade.", c.name))
-            }
-            Err(e) => failed(e),
-        }
+    async fn delete_connection(&self, Parameters(p): Parameters<IdParam>) -> ToolResult {
+        let c = self.find(&p.id)?;
+        profiles::delete(&p.id)?;
+        self.changed();
+        text(format!("Connection '{}' removed from Kade.", c.name))
     }
 
     #[tool(description = "Move connections into a group (created implicitly).")]
-    async fn move_to_group(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, McpError> {
+    async fn move_to_group(&self, Parameters(p): Parameters<MoveParams>) -> ToolResult {
         let group = p.group.trim().to_string();
         let result = store::update(|data| {
             let now = store::now_ms();
@@ -433,17 +415,13 @@ impl KadeMcp {
             }
             Ok(moved)
         });
-        match result {
-            Ok(n) => {
-                self.changed();
-                text(format!("Moved {n} connection(s) to group '{group}'."))
-            }
-            Err(e) => failed(e),
-        }
+        let n = result?;
+        self.changed();
+        text(format!("Moved {n} connection(s) to group '{group}'."))
     }
 
     #[tool(description = "Rename a group (or merge it into another by renaming to an existing name).")]
-    async fn rename_group(&self, Parameters(p): Parameters<RenameGroupParams>) -> Result<CallToolResult, McpError> {
+    async fn rename_group(&self, Parameters(p): Parameters<RenameGroupParams>) -> ToolResult {
         let (from, to) = (p.from.trim().to_string(), p.to.trim().to_string());
         let result = store::update(|data| {
             let now = store::now_ms();
@@ -455,24 +433,19 @@ impl KadeMcp {
             }
             Ok(n)
         });
-        match result {
-            Ok(0) => failed(format!("No group '{from}' found.")),
-            Ok(n) => {
-                self.changed();
-                text(format!("Renamed group '{from}' to '{to}' ({n} connections)."))
-            }
-            Err(e) => failed(e),
+        let n = result?;
+        if n == 0 {
+            return failed(format!("No group '{from}' found."));
         }
+        self.changed();
+        text(format!("Renamed group '{from}' to '{to}' ({n} connections)."))
     }
 
     #[tool(
         description = "Try to log in with a saved connection and report the result, without opening it in the app. Connections with method 'password' cannot be tested this way. An unknown host key is reported, never trusted automatically: the user must open the connection in Kade and check the fingerprint."
     )]
-    async fn test_connection(&self, Parameters(p): Parameters<IdParam>) -> Result<CallToolResult, McpError> {
-        let profile = match self.find(&p.id) {
-            Ok(c) => c,
-            Err(e) => return failed(e),
-        };
+    async fn test_connection(&self, Parameters(p): Parameters<IdParam>) -> ToolResult {
+        let profile = self.find(&p.id)?;
         match crate::ssh::connect(&profile, None, None).await {
             Ok((session, connected)) => {
                 if let Some(fs) = &session.fs {
@@ -494,11 +467,8 @@ impl KadeMcp {
     }
 
     #[tool(description = "Open a connection in the Kade window (connects and shows it in a tab).")]
-    async fn open_connection(&self, Parameters(p): Parameters<IdParam>) -> Result<CallToolResult, McpError> {
-        let c = match self.find(&p.id) {
-            Ok(c) => c,
-            Err(e) => return failed(e),
-        };
+    async fn open_connection(&self, Parameters(p): Parameters<IdParam>) -> ToolResult {
+        let c = self.find(&p.id)?;
         let _ = self.app.emit("mcp-open", &c.id);
         text(format!("Opening '{}' in Kade.", c.name))
     }
@@ -506,26 +476,20 @@ impl KadeMcp {
     #[tool(
         description = "List SSH keys available for auth: source 'one_password' (1Password SSH agent) or 'agent'. Use a key's fingerprint as auth.key_fingerprint to pin it."
     )]
-    async fn list_ssh_keys(&self, Parameters(p): Parameters<KeysParams>) -> Result<CallToolResult, McpError> {
+    async fn list_ssh_keys(&self, Parameters(p): Parameters<KeysParams>) -> ToolResult {
         let auth = match p.source.as_str() {
             "one_password" => Auth::OnePassword { key_fingerprint: None, account: None, key_item: None },
             "agent" => Auth::Agent { key_fingerprint: None },
             other => return failed(format!("Unknown source '{other}'; use one_password or agent.")),
         };
-        match crate::ssh::agent_keys(&auth).await {
-            Ok(keys) => json(keys),
-            Err(e) => failed(e),
-        }
+        json(crate::ssh::agent_keys(&auth).await?)
     }
 
     #[tool(
         description = "List the 1Password accounts on this computer and the vaults in each. Machines can be signed in to several accounts (work and personal): always set auth.account so Kade uses the right one."
     )]
-    async fn list_1password_vaults(&self) -> Result<CallToolResult, McpError> {
-        let accounts = match crate::onepassword::accounts().await {
-            Ok(a) => a,
-            Err(e) => return failed(e),
-        };
+    async fn list_1password_vaults(&self) -> ToolResult {
+        let accounts = crate::onepassword::accounts().await?;
         let mut out = Vec::new();
         for a in accounts {
             let vaults = crate::onepassword::vaults(Some(&a.id)).await.unwrap_or_default();
@@ -537,34 +501,27 @@ impl KadeMcp {
     #[tool(
         description = "List SSH Key items in a 1Password account/vault with their fingerprints. For auth method one_password set key_fingerprint, key_item (the item reference) and account, so the key works even on machines whose SSH agent doesn't offer that vault."
     )]
-    async fn find_1password_ssh_keys(&self, Parameters(p): Parameters<VaultParams>) -> Result<CallToolResult, McpError> {
-        match crate::onepassword::ssh_keys(p.account.as_deref(), p.vault.as_deref()).await {
-            Ok(keys) => json(keys),
-            Err(e) => failed(e),
-        }
+    async fn find_1password_ssh_keys(&self, Parameters(p): Parameters<VaultParams>) -> ToolResult {
+        json(crate::onepassword::ssh_keys(p.account.as_deref(), p.vault.as_deref()).await?)
     }
 
     #[tool(
         description = "Search 1Password logins (needs the 1Password CLI). Use a result's reference as auth.reference with method 'one_password_secret', together with auth.account. Never returns passwords."
     )]
-    async fn find_1password_logins(&self, Parameters(p): Parameters<LoginsParams>) -> Result<CallToolResult, McpError> {
-        match crate::onepassword::items(p.account.as_deref(), p.vault.as_deref()).await {
-            Ok(items) => {
-                let q = p.query.unwrap_or_default().to_lowercase();
-                let hits: Vec<_> = items
-                    .into_iter()
-                    .filter(|i| {
-                        q.is_empty()
-                            || format!("{} {} {}", i.title, i.username.as_deref().unwrap_or(""), i.url.as_deref().unwrap_or(""))
-                                .to_lowercase()
-                                .contains(&q)
-                    })
-                    .take(25)
-                    .collect();
-                json(hits)
-            }
-            Err(e) => failed(e),
-        }
+    async fn find_1password_logins(&self, Parameters(p): Parameters<LoginsParams>) -> ToolResult {
+        let items = crate::onepassword::items(p.account.as_deref(), p.vault.as_deref()).await?;
+        let q = p.query.unwrap_or_default().to_lowercase();
+        let hits: Vec<_> = items
+            .into_iter()
+            .filter(|i| {
+                q.is_empty()
+                    || format!("{} {} {}", i.title, i.username.as_deref().unwrap_or(""), i.url.as_deref().unwrap_or(""))
+                        .to_lowercase()
+                        .contains(&q)
+            })
+            .take(25)
+            .collect();
+        json(hits)
     }
 }
 

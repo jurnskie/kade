@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::backup::{Op, Recorder, Side};
 use crate::error::{AppError, AppResult};
+use crate::remote::{copy_chunks, no_op};
 use crate::ssh::Session;
 
 const QUIET: Duration = Duration::from_millis(400);
@@ -124,14 +125,7 @@ impl Edit {
         let fs = self.session.fs()?;
         let mut reader = fs.reader(&remote).await?;
         let mut content = Vec::new();
-        let mut buf = vec![0u8; 256 * 1024];
-        loop {
-            let n = reader.read(&mut buf).await?;
-            if n == 0 {
-                break;
-            }
-            content.extend_from_slice(&buf[..n]);
-        }
+        copy_chunks(&mut reader, &mut content, no_op).await?;
         reader.finish().await?;
         let mut file = tokio::fs::File::create(&local).await?;
         file.write_all(&content).await?;

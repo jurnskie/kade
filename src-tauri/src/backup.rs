@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{AppError, AppResult};
+use crate::remote::{copy_chunks, no_op};
 use crate::ssh::{join_remote, Session};
 use crate::store::now_ms;
 
@@ -201,14 +202,7 @@ async fn download_file(fs: &crate::remote::RemoteFs, src: &str, dst: &Path) -> A
     }
     let mut from = fs.reader(src).await?;
     let mut to = tokio::fs::File::create(dst).await?;
-    let mut buf = vec![0u8; 256 * 1024];
-    loop {
-        let n = from.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        to.write_all(&buf[..n]).await?;
-    }
+    copy_chunks(&mut from, &mut to, no_op).await?;
     from.finish().await?;
     to.flush().await?;
     Ok(())
@@ -230,14 +224,7 @@ async fn upload_tree(session: &Session, src: &Path, dst: &str) -> AppResult<()> 
         } else {
             let mut from = tokio::fs::File::open(&src).await?;
             let mut to = fs.writer(&dst).await?;
-            let mut buf = vec![0u8; 256 * 1024];
-            loop {
-                let n = tokio::io::AsyncReadExt::read(&mut from, &mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                to.write_all(&buf[..n]).await?;
-            }
+            copy_chunks(&mut from, &mut to, no_op).await?;
             to.finish().await?;
         }
     }

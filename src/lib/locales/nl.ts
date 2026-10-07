@@ -2,6 +2,10 @@
 // Missing keys fall back to English. Keep {placeholders} identical.
 
 const nl: Record<string, string> = {
+  "General": "Algemeen",
+  "Automatic follows your system.": "Automatisch volgt je systeem.",
+  "Dotfiles such as .env and .htaccess. Each pane can still switch on its own.": "Bestanden zoals .env en .htaccess. Elk paneel kan dit nog zelf omzetten.",
+  "MCP server": "MCP-server",
   "Every Host in ~/.ssh/config becomes a connection, with its HostName, User, Port and key. Includes are followed; hosts behind a jump host are skipped for now.": "Elke Host in ~/.ssh/config wordt een server, met zijn HostName, User, Port en sleutel. Includes worden gevolgd; hosts achter een jump host worden voorlopig overgeslagen.",
   "Starting…": "Starten…",
   "Import": "Importeren",

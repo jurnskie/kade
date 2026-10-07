@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ArchiveRestore, X, Trash2, Laptop, Server, LoaderCircle, Undo2 } from "@lucide/svelte";
+  import { ArchiveRestore, Trash2, Laptop, Server, LoaderCircle, Undo2 } from "@lucide/svelte";
   import { api, errorMessage, type Transaction } from "$lib/api";
   import { locale, t, tn } from "$lib/i18n.svelte";
+  import Modal from "./Modal.svelte";
 
   let {
     retentionDays,
@@ -77,18 +78,17 @@
   const opLabel = $derived({ delete: t("Deleted"), overwrite: t("Overwritten"), restore: t("Before restore") });
 </script>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />
-
-<div class="scrim" role="presentation" onclick={onclose}></div>
-<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="bk-title">
-  <div class="sh">
-    <ArchiveRestore size={18} color="var(--pine)" />
-    <div>
-      <h1 id="bk-title">Backups</h1>
-      <p>{t("Everything Kade deletes or overwrites is kept for {n} days.", { n: retentionDays })}</p>
+<Modal width={760} labelledby="bk-title" {onclose}>
+  {#snippet header(close)}
+    <div class="sh">
+      <ArchiveRestore size={18} color="var(--pine)" />
+      <div>
+        <h1 id="bk-title">Backups</h1>
+        <p>{t("Everything Kade deletes or overwrites is kept for {n} days.", { n: retentionDays })}</p>
+      </div>
+      {@render close()}
     </div>
-    <button class="x" onclick={onclose} aria-label={t("Close")}><X size={16} /></button>
-  </div>
+  {/snippet}
 
   {#if error}<div class="err">{error}</div>{/if}
 
@@ -145,32 +145,9 @@
       </div>
     {/each}
   </div>
-</div>
+</Modal>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    backdrop-filter: blur(3px);
-    z-index: 10;
-  }
-  .sheet {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: min(760px, calc(100vw - 32px));
-    max-height: calc(100vh - 48px);
-    display: flex;
-    flex-direction: column;
-    background: var(--paper);
-    border-radius: 16px;
-    box-shadow: var(--shadow-lg);
-    z-index: 11;
-    overflow: hidden;
-    user-select: text;
-  }
   .sh {
     display: flex;
     align-items: flex-start;
@@ -188,14 +165,6 @@
   .sh p {
     color: var(--lichen);
     margin-top: 2px;
-  }
-  .x {
-    margin-left: auto;
-    padding: 6px;
-    border-radius: 6px;
-  }
-  .x:hover {
-    background: var(--mist2);
   }
   .err {
     margin: 12px 22px 0;

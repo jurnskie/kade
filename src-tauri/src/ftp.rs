@@ -4,14 +4,17 @@
 //! takes the connection lock; a running transfer keeps holding it until its
 //! data stream is finished. Concurrent jobs simply wait their turn.
 
+use std::io;
+use std::pin::Pin;
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use suppaftp::list::File as ListFile;
 use suppaftp::tokio::{AsyncRustlsConnector, AsyncRustlsFtpStream, AsyncRustlsStream, TransferStream};
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, Status};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::error::{AppError, AppResult};
@@ -293,15 +296,27 @@ pub struct FtpTransfer {
     _guard: OwnedMutexGuard<AsyncRustlsFtpStream>,
 }
 
+impl AsyncRead for FtpTransfer {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for FtpTransfer {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
 impl FtpTransfer {
-    pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.read(buf).await
-    }
-
-    pub async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.stream.write_all(buf).await
-    }
-
     /// Completes the transfer and reads the server's verdict.
     pub async fn finish(mut self) -> AppResult<()> {
         self.stream.flush().await?;

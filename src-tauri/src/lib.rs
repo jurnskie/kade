@@ -502,7 +502,8 @@ fn transfer_start(
     let emit: transfer::Emit = Arc::new(move |p: &transfer::Progress| {
         let _ = app.emit("transfer", p);
     });
-    Ok(transfer::start(emit, transfers.inner().clone(), session, session_id, direction, sources, dest_dir, conflict))
+    let spec = transfer::JobSpec { direction, sources, dest_dir, policy: conflict };
+    Ok(transfer::start(emit, transfers.inner().clone(), session, session_id, spec))
 }
 
 #[tauri::command]
