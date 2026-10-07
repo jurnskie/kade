@@ -1,19 +1,22 @@
 //! Upload/download queue. Each top-level item the user drops becomes one job;
 //! directories are walked and copied recursively. Jobs run a few at a time on
-//! the shared SFTP session and report progress through the `transfer` event.
+//! the shared SFTP session, each copying several files at once, and report
+//! progress through the `transfer` event.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, Semaphore};
 
 use crate::backup::{self, Recorder};
 use crate::error::{AppError, AppResult};
+use crate::remote::{Meta, RemoteFs};
 use crate::ssh::{join_remote, Session};
 
 const CHUNK: usize = 256 * 1024;
@@ -249,6 +252,37 @@ impl Reporter {
     }
 }
 
+/// What an upload knows about the destination tree. Each folder is listed
+/// once, instead of a STAT (on FTP: a whole LIST of the parent) per file.
+#[derive(Default)]
+struct Listings {
+    /// Remote folders whose complete contents are in `entries`.
+    dirs: HashSet<String>,
+    entries: HashMap<String, Meta>,
+}
+
+impl Listings {
+    async fn add_dir(&mut self, fs: &RemoteFs, dir: &str) -> AppResult<()> {
+        for entry in fs.list(dir).await? {
+            let meta = Meta { is_dir: entry.is_dir, is_symlink: entry.is_symlink, size: entry.size, mtime: entry.modified };
+            self.entries.insert(entry.path, meta);
+        }
+        self.dirs.insert(dir.to_string());
+        Ok(())
+    }
+
+    /// Metadata of `path`, from the listings when its folder was listed.
+    async fn stat(&self, fs: &RemoteFs, path: &str) -> AppResult<Option<Meta>> {
+        if let Some(meta) = self.entries.get(path) {
+            return Ok(Some(meta.clone()));
+        }
+        if self.dirs.contains(backup::parent(path)) {
+            return Ok(None);
+        }
+        fs.stat(path).await
+    }
+}
+
 enum Decision {
     Skip,
     /// Copy; `replaces` means an existing destination gets backed up first.
@@ -257,9 +291,9 @@ enum Decision {
     },
 }
 
-async fn decide(session: &Session, direction: Direction, item: &Item, policy: Conflict) -> AppResult<Decision> {
+async fn decide(session: &Session, direction: Direction, item: &Item, policy: Conflict, listings: &Listings) -> AppResult<Decision> {
     let dst_mtime = match direction {
-        Direction::Upload => match session.fs()?.stat(&item.dst).await? {
+        Direction::Upload => match listings.stat(session.fs()?, &item.dst).await? {
             Some(m) => m.mtime,
             None => return Ok(Decision::Copy { replaces: false }),
         },
@@ -278,7 +312,10 @@ async fn decide(session: &Session, direction: Direction, item: &Item, policy: Co
     Ok(if copy { Decision::Copy { replaces: true } } else { Decision::Skip })
 }
 
-async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &Ctl, rep: &mut Reporter) -> AppResult<()> {
+/// The job's reporter, shared by the files that copy at the same time.
+type SharedReporter<'a> = Mutex<&'a mut Reporter>;
+
+async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &Ctl, rep: &SharedReporter<'_>) -> AppResult<()> {
     let fs = session.fs()?;
     let mut buf = vec![0u8; CHUNK];
     match direction {
@@ -292,7 +329,7 @@ async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &C
                     break;
                 }
                 dst.write_all(&buf[..n]).await?;
-                rep.add_bytes(n as u64);
+                rep.lock().unwrap().add_bytes(n as u64);
             }
             dst.finish().await?;
             // Keep the source's modification time, so "only newer" works both ways.
@@ -308,7 +345,7 @@ async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &C
                     break;
                 }
                 dst.write_all(&buf[..n]).await?;
-                rep.add_bytes(n as u64);
+                rep.lock().unwrap().add_bytes(n as u64);
             }
             src.finish().await?;
             dst.flush().await?;
@@ -319,16 +356,73 @@ async fn copy_file(session: &Session, direction: Direction, item: &Item, ctl: &C
     Ok(())
 }
 
-async fn make_dir(session: &Session, direction: Direction, path: &str) -> AppResult<()> {
-    match direction {
-        Direction::Upload => {
-            let fs = session.fs()?;
-            if !fs.exists(path).await? {
-                fs.mkdir(path).await?;
+/// Create the job's directories, parents first. For uploads, also list the
+/// ones that already exist so the files can be checked without a request each.
+async fn make_dirs(session: &Session, direction: Direction, items: &[Item], ctl: &Ctl) -> AppResult<Listings> {
+    let mut listings = Listings::default();
+    for item in items.iter().filter(|i| i.is_dir) {
+        ctl.checkpoint().await?;
+        match direction {
+            Direction::Upload => {
+                let fs = session.fs()?;
+                if listings.stat(fs, &item.dst).await?.is_some() {
+                    listings.add_dir(fs, &item.dst).await?;
+                } else {
+                    fs.mkdir(&item.dst).await?;
+                    listings.dirs.insert(item.dst.clone());
+                }
+            }
+            Direction::Download => std::fs::create_dir_all(&item.dst)?,
+        }
+    }
+    Ok(listings)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn transfer_file(
+    session: &Session,
+    direction: Direction,
+    item: &Item,
+    policy: Conflict,
+    listings: &Listings,
+    ctl: &Ctl,
+    rep: &SharedReporter<'_>,
+    undo: &tokio::sync::Mutex<&mut Recorder>,
+) -> AppResult<()> {
+    ctl.checkpoint().await?;
+    match decide(session, direction, item, policy, listings).await? {
+        Decision::Skip => {
+            let mut rep = rep.lock().unwrap();
+            rep.progress.skipped += 1;
+            rep.progress.bytes_total -= item.size;
+            return Ok(());
+        }
+        Decision::Copy { replaces: true } => {
+            let side = match direction {
+                Direction::Upload => Some(session),
+                Direction::Download => None,
+            };
+            let mut undo = undo.lock().await;
+            undo.stash(side, &item.dst).await?;
+            rep.lock().unwrap().progress.backup_id = Some(undo.id().to_string());
+        }
+        Decision::Copy { replaces: false } => {}
+    }
+    if let Err(e) = copy_file(session, direction, item, ctl, rep).await {
+        // Don't leave a half-written file behind.
+        match direction {
+            Direction::Upload => {
+                let _ = session.fs()?.remove_file(&item.dst).await;
+            }
+            Direction::Download => {
+                let _ = std::fs::remove_file(&item.dst);
             }
         }
-        Direction::Download => std::fs::create_dir_all(path)?,
+        return Err(e);
     }
+    let mut rep = rep.lock().unwrap();
+    rep.progress.files_done += 1;
+    rep.emit();
     Ok(())
 }
 
@@ -350,48 +444,34 @@ async fn run_job(
     rep.progress.bytes_total = items.iter().map(|i| i.size).sum();
     rep.state(JobState::Running);
 
-    // Scanning pushes parents before children, so directories exist in time.
-    for item in &items {
-        ctl.checkpoint().await?;
-        if ctl.paused.load(Ordering::SeqCst) {
-            rep.state(JobState::Paused);
-        }
-        if item.is_dir {
-            make_dir(session, direction, &item.dst).await?;
-            continue;
-        }
-        match decide(session, direction, item, policy).await? {
-            Decision::Skip => {
-                rep.progress.skipped += 1;
-                rep.progress.bytes_total -= item.size;
-                continue;
+    // Scanning pushes parents before children, so this creates them in order.
+    let listings = make_dirs(session, direction, &items, ctl).await?;
+
+    // Small files are dominated by round trips, so copy several at once.
+    let parallel = session.fs()?.parallel_files();
+    let rep = Mutex::new(rep);
+    let undo = tokio::sync::Mutex::new(undo);
+    let mut files = items.iter().filter(|i| !i.is_dir);
+    let mut running = FuturesUnordered::new();
+    let mut failure = None;
+    loop {
+        while failure.is_none() && running.len() < parallel {
+            let Some(item) = files.next() else { break };
+            if ctl.paused.load(Ordering::SeqCst) {
+                rep.lock().unwrap().state(JobState::Paused);
             }
-            Decision::Copy { replaces: true } => {
-                let side = match direction {
-                    Direction::Upload => Some(session),
-                    Direction::Download => None,
-                };
-                undo.stash(side, &item.dst).await?;
-                rep.progress.backup_id = Some(undo.id().to_string());
-            }
-            Decision::Copy { replaces: false } => {}
+            running.push(transfer_file(session, direction, item, policy, &listings, ctl, &rep, &undo));
         }
-        if let Err(e) = copy_file(session, direction, item, ctl, rep).await {
-            // Don't leave a half-written file behind.
-            match direction {
-                Direction::Upload => {
-                    let _ = session.fs()?.remove_file(&item.dst).await;
-                }
-                Direction::Download => {
-                    let _ = std::fs::remove_file(&item.dst);
-                }
+        // After a failure, let the files in flight finish (or clean up), then report the first error.
+        match running.next().await {
+            Some(Err(e)) => {
+                failure.get_or_insert(e);
             }
-            return Err(e);
+            Some(Ok(())) => {}
+            None => break,
         }
-        rep.progress.files_done += 1;
-        rep.emit();
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 /// Queue one job per source. Returns the job ids immediately.

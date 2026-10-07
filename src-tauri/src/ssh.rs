@@ -338,7 +338,8 @@ async fn connect_ssh(
     password: Option<String>,
     accept_fingerprint: Option<String>,
 ) -> AppResult<(Session, String, String)> {
-    let config = Arc::new(client::Config { keepalive_interval: Some(Duration::from_secs(30)), ..Default::default() });
+    // nodelay: SFTP is request/response; Nagle would hold back small requests.
+    let config = Arc::new(client::Config { keepalive_interval: Some(Duration::from_secs(30)), nodelay: true, ..Default::default() });
     let rejection = Arc::new(Mutex::new(None));
     let handler = Client { host: profile.host.clone(), port: profile.port, accept_fingerprint, rejection: rejection.clone() };
 
@@ -379,7 +380,10 @@ async fn connect_ssh(
 async fn open_sftp(handle: &Handle<Client>) -> AppResult<SftpSession> {
     let channel = handle.channel_open_session().await?;
     channel.request_subsystem(true, "sftp").await?;
-    Ok(SftpSession::new(channel.into_stream()).await?)
+    // 64 writes of 32 KiB in flight, like OpenSSH's sftp: the default 16 caps
+    // uploads at 512 KiB per round trip. 32 KiB is the size every server accepts.
+    let config = russh_sftp::client::Config { max_concurrent_writes: 64, ..Default::default() };
+    Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
 }
 
 pub fn join_remote(dir: &str, name: &str) -> String {

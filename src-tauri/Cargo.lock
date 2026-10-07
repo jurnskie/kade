@@ -2577,6 +2577,7 @@ dependencies = [
  "axum",
  "chrono",
  "dirs",
+ "futures-util",
  "hex",
  "notify",
  "plist",

@@ -1,9 +1,12 @@
 //! One file-system interface over SFTP and FTP, so listing, transfers,
 //! deleting and backups don't care which protocol a server speaks.
 
+use std::collections::HashSet;
+
+use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::fs::File as SftpFile;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{FileAttributes, OpenFlags};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{AppError, AppResult};
@@ -79,6 +82,15 @@ impl RemoteFs {
         matches!(self, RemoteFs::Sftp(_))
     }
 
+    /// How many files one transfer job may copy at once. SFTP pipelines
+    /// requests over one channel; FTP has a single control connection.
+    pub fn parallel_files(&self) -> usize {
+        match self {
+            RemoteFs::Sftp(_) => 8,
+            RemoteFs::Ftp(_) => 1,
+        }
+    }
+
     /// How far apart modification times may be and still count as equal.
     pub fn mtime_tolerance(&self) -> i64 {
         match self {
@@ -122,12 +134,12 @@ impl RemoteFs {
     pub async fn stat(&self, path: &str) -> AppResult<Option<Meta>> {
         match self {
             RemoteFs::Ftp(ftp) => ftp.stat(path).await,
-            RemoteFs::Sftp(sftp) => {
-                if !sftp.try_exists(path).await? {
-                    return Ok(None);
-                }
-                Ok(Some(meta_from_sftp(&sftp.metadata(path).await?)))
-            }
+            // One STAT; "no such file" means absent (try_exists would be a second STAT).
+            RemoteFs::Sftp(sftp) => match sftp.metadata(path).await {
+                Ok(m) => Ok(Some(meta_from_sftp(&m))),
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(None),
+                Err(e) => Err(e.into()),
+            },
         }
     }
 
@@ -151,12 +163,22 @@ impl RemoteFs {
     }
 
     pub async fn mkdir_p(&self, dir: &str) -> AppResult<()> {
+        self.mkdir_p_cached(dir, &mut HashSet::new()).await
+    }
+
+    /// `mkdir_p` that skips the directories in `known` (and adds the ones it
+    /// checks), so a run of files under the same tree doesn't re-check every level.
+    pub async fn mkdir_p_cached(&self, dir: &str, known: &mut HashSet<String>) -> AppResult<()> {
         let mut acc = String::new();
         for part in dir.split('/').filter(|p| !p.is_empty()) {
             acc = format!("{acc}/{part}");
+            if known.contains(&acc) {
+                continue;
+            }
             if !self.exists(&acc).await? {
                 self.mkdir(&acc).await?;
             }
+            known.insert(acc.clone());
         }
         Ok(())
     }

@@ -10,6 +10,7 @@
 //! downloaded to the local backup folder instead. Transactions are listed in a
 //! per-machine `index.json` and purged after the retention period.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -210,6 +211,8 @@ async fn upload_tree(session: &Session, src: &Path, dst: &str) -> AppResult<()> 
 /// Collects the items of one transaction as they are moved aside.
 pub struct Recorder {
     tx: Transaction,
+    /// Remote backup folders known to exist, so each file's stash doesn't re-check the whole path.
+    remote_dirs: HashSet<String>,
 }
 
 impl Recorder {
@@ -226,6 +229,7 @@ impl Recorder {
                 entries: Vec::new(),
                 restored: false,
             },
+            remote_dirs: HashSet::new(),
         }
     }
 
@@ -257,13 +261,14 @@ impl Recorder {
                 if fs.keeps_backups_on_server() {
                     let root = remote_tx_root(session, &self.tx.id)?;
                     let stored = mirrored(&root, path);
-                    fs.mkdir_p(parent(&stored)).await?;
+                    fs.mkdir_p_cached(parent(&stored), &mut self.remote_dirs).await?;
                     if fs.rename(path, &stored).await.is_ok() {
                         BackupEntry { original: path.into(), stored, stored_on: Side::Remote, is_dir }
                     } else {
                         // Different filesystem on the server: keep a local copy instead,
                         // and drop the now-unused folders we just created for it.
                         fs.rmdir_up(parent(&stored), &root).await;
+                        self.remote_dirs.clear();
                         let dst = local_tx.join(path.trim_start_matches('/'));
                         download_tree(session, path, &dst).await?;
                         fs.delete_tree(path).await?;
