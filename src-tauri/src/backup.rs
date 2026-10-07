@@ -63,8 +63,12 @@ pub struct Transaction {
 
 static INDEX: Mutex<()> = Mutex::new(());
 
+/// `KADE_DATA_HOME` overrides the data folder. Tests rely on it: `dirs`
+/// ignores `XDG_DATA_HOME` on macOS.
 fn local_root() -> AppResult<PathBuf> {
-    let dir = dirs::data_local_dir()
+    let dir = std::env::var_os("KADE_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::data_local_dir)
         .ok_or_else(|| AppError::other(tr!("No data directory found", "Geen data-map gevonden")))?
         .join("kade/backups");
     std::fs::create_dir_all(&dir)?;
@@ -105,7 +109,25 @@ fn remote_tx_root(session: &Session, id: &str) -> AppResult<String> {
 /// True for paths inside Kade's own backup folder on the server; those are
 /// deleted for real instead of being backed up again.
 pub fn is_remote_backup_path(session: &Session, path: &str) -> bool {
-    session.remote_home.as_deref().is_some_and(|home| path.starts_with(&join_remote(home, REMOTE_ROOT)))
+    session.remote_home.as_deref().is_some_and(|home| is_within(path, &join_remote(home, REMOTE_ROOT)))
+}
+
+/// `path` is `dir` or lies inside it (`/a/bc` is not inside `/a/b`).
+fn is_within(path: &str, dir: &str) -> bool {
+    let (path, dir) = (path.trim_end_matches('/'), dir.trim_end_matches('/'));
+    path.strip_prefix(dir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Refuse server paths whose backup would be catastrophic: the home folder,
+/// and anything containing Kade's backup folder (it can't move into itself,
+/// and the fallback would delete every backup on the server).
+fn guard_remote(session: &Session, path: &str) -> AppResult<()> {
+    crate::fs::guard(path)?;
+    let Some(home) = session.remote_home.as_deref() else { return Ok(()) };
+    if is_within(home, path) || is_within(&join_remote(home, REMOTE_ROOT), path) {
+        return Err(AppError::other(tr!("Refusing to operate on {path}", "Weigert bewerking op {path}", path = path)));
+    }
+    Ok(())
 }
 
 /// Mirror an absolute path under a root: `/var/www/x` → `<root>/var/www/x`.
@@ -239,7 +261,10 @@ impl Recorder {
 
     /// Move `path` into the backup. Afterwards `path` no longer exists.
     pub async fn stash(&mut self, session: Option<&Session>, path: &str) -> AppResult<()> {
-        crate::fs::guard(path)?;
+        match (self.tx.side, session) {
+            (Side::Remote, Some(session)) => guard_remote(session, path)?,
+            _ => crate::fs::guard(path)?,
+        }
         let local_tx = local_root()?.join(&self.tx.id);
         let entry = match (self.tx.side, session) {
             (Side::Local, _) => {
@@ -287,6 +312,29 @@ impl Recorder {
         Ok(())
     }
 
+    /// Undo the stash of `path`, for when what should have replaced it failed.
+    /// On error the entry stays in the transaction, so it can still be restored.
+    pub async fn put_back(&mut self, session: Option<&Session>, path: &str) -> AppResult<()> {
+        let Some(i) = self.tx.entries.iter().rposition(|e| e.original == path) else { return Ok(()) };
+        move_back(self.tx.side, session, &self.tx.entries[i]).await?;
+        let entry = self.tx.entries.remove(i);
+        if let (Side::Remote, Some(s)) = (entry.stored_on, session) {
+            // Drop the backup folders that are now empty.
+            let root = remote_tx_root(s, &self.tx.id)?;
+            s.fs()?.rmdir_up(parent(&entry.stored), &root).await;
+            self.remote_dirs.clear();
+        }
+        let local_tx = local_root()?.join(&self.tx.id);
+        if self.tx.entries.is_empty() && local_tx.exists() {
+            std::fs::remove_dir_all(local_tx)?;
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tx.entries.is_empty()
+    }
+
     /// Record the transaction (no-op when nothing was backed up).
     pub fn commit(self) -> AppResult<Option<Transaction>> {
         if self.tx.entries.is_empty() {
@@ -308,6 +356,25 @@ async fn exists(side: Side, session: Option<&Session>, path: &str) -> AppResult<
     })
 }
 
+/// Move one stored item back to its original path.
+async fn move_back(side: Side, session: Option<&Session>, entry: &BackupEntry) -> AppResult<()> {
+    match (side, entry.stored_on) {
+        (Side::Local, _) => move_local(Path::new(&entry.stored), Path::new(&entry.original))?,
+        (Side::Remote, Side::Remote) => {
+            let s = session.ok_or(AppError::SessionNotFound)?;
+            s.fs()?.mkdir_p(parent(&entry.original)).await?;
+            s.fs()?.rename(&entry.stored, &entry.original).await?;
+        }
+        (Side::Remote, Side::Local) => {
+            let s = session.ok_or(AppError::SessionNotFound)?;
+            s.fs()?.mkdir_p(parent(&entry.original)).await?;
+            upload_tree(s, Path::new(&entry.stored), &entry.original).await?;
+            crate::fs::delete(&entry.stored)?;
+        }
+    }
+    Ok(())
+}
+
 /// Put a transaction's items back. Whatever now occupies those paths is
 /// itself backed up first, so a restore can be undone too.
 pub async fn restore(id: &str, session: Option<&Session>) -> AppResult<Option<Transaction>> {
@@ -324,20 +391,7 @@ pub async fn restore(id: &str, session: Option<&Session>) -> AppResult<Option<Tr
         if exists(tx.side, session, &entry.original).await? {
             undo.stash(session, &entry.original).await?;
         }
-        match (tx.side, entry.stored_on) {
-            (Side::Local, _) => move_local(Path::new(&entry.stored), Path::new(&entry.original))?,
-            (Side::Remote, Side::Remote) => {
-                let s = session.ok_or(AppError::SessionNotFound)?;
-                s.fs()?.mkdir_p(parent(&entry.original)).await?;
-                s.fs()?.rename(&entry.stored, &entry.original).await?;
-            }
-            (Side::Remote, Side::Local) => {
-                let s = session.ok_or(AppError::SessionNotFound)?;
-                s.fs()?.mkdir_p(parent(&entry.original)).await?;
-                upload_tree(s, Path::new(&entry.stored), &entry.original).await?;
-                crate::fs::delete(&entry.stored)?;
-            }
-        }
+        move_back(tx.side, session, entry).await?;
     }
 
     {
@@ -404,11 +458,11 @@ mod tests {
     use super::*;
 
     /// Delete a local folder into a backup, then restore it. Runs against a
-    /// temporary XDG data dir so the real backup index is untouched.
+    /// temporary data dir so the real backup index is untouched.
     #[tokio::test]
     async fn local_delete_and_restore_roundtrip() {
         let tmp = std::env::temp_dir().join(format!("kade-test-{}", uuid::Uuid::new_v4()));
-        std::env::set_var("XDG_DATA_HOME", tmp.join("data"));
+        std::env::set_var("KADE_DATA_HOME", tmp.join("data"));
         let work = tmp.join("work/site");
         std::fs::create_dir_all(work.join("sub")).unwrap();
         std::fs::write(work.join("sub/a.txt"), "hello").unwrap();
@@ -435,6 +489,14 @@ mod tests {
     #[test]
     fn mirrors_absolute_paths() {
         assert_eq!(mirrored("/home/j/.cache/kade/backups/t1", "/var/www/.env"), "/home/j/.cache/kade/backups/t1/var/www/.env");
+    }
+
+    #[test]
+    fn within_respects_segments() {
+        assert!(is_within("/home/j/.cache/kade/backups/t1/x", "/home/j/.cache/kade/backups"));
+        assert!(is_within("/home/j/.cache/kade/backups/", "/home/j/.cache/kade/backups"));
+        assert!(!is_within("/home/j/.cache/kade/backups-old/x", "/home/j/.cache/kade/backups"));
+        assert!(!is_within("/home/j", "/home/j/.cache"));
     }
 
     #[test]

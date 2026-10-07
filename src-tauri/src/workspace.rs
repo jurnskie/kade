@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn create_move_and_delete() {
         let tmp = std::env::temp_dir().join(format!("kade-ws-{}", uuid::Uuid::new_v4()));
-        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        std::env::set_var("KADE_CONFIG_HOME", &tmp);
 
         // Fresh store: only the implicit default.
         let ws = store::load().unwrap().workspaces_or_default();

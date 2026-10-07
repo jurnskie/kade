@@ -161,8 +161,14 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// `KADE_CONFIG_HOME` overrides the config folder. Tests rely on it: `dirs`
+/// ignores `XDG_CONFIG_HOME` on macOS.
 fn config_dir() -> AppResult<PathBuf> {
-    let dir = dirs::config_dir().ok_or_else(|| AppError::other(tr!("No config directory found", "Geen config-map gevonden")))?.join("kade");
+    let dir = std::env::var_os("KADE_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::config_dir)
+        .ok_or_else(|| AppError::other(tr!("No config directory found", "Geen config-map gevonden")))?
+        .join("kade");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

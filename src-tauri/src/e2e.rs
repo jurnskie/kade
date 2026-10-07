@@ -60,7 +60,7 @@ async fn scenario(base: &Path) {
     let key = std::env::var("KADE_E2E_KEY").expect("KADE_E2E_KEY");
     let tmp = base.join(format!("kade-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).unwrap();
-    std::env::set_var("XDG_DATA_HOME", tmp.join("data"));
+    std::env::set_var("KADE_DATA_HOME", tmp.join("data"));
     std::env::set_var("KADE_KNOWN_HOSTS", tmp.join("known_hosts"));
 
     let profile = ServerProfile {
@@ -206,7 +206,7 @@ async fn e2e_speed() {
 async fn e2e_ftp() {
     let tmp = std::env::temp_dir().join(format!("kade-ftp-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).unwrap();
-    std::env::set_var("XDG_DATA_HOME", tmp.join("data"));
+    std::env::set_var("KADE_DATA_HOME", tmp.join("data"));
 
     for (protocol, port, root_var) in [(Protocol::Ftp, 2121, "KADE_E2E_FTP_ROOT"), (Protocol::Ftps, 2122, "KADE_E2E_FTPS_ROOT")] {
         let root = std::path::PathBuf::from(std::env::var(root_var).expect(root_var));
@@ -345,7 +345,7 @@ async fn e2e_edit() {
     let key = std::env::var("KADE_E2E_KEY").expect("KADE_E2E_KEY");
     let tmp = dirs::home_dir().unwrap().join(format!(".cache/kade-e2e-edit-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).unwrap();
-    std::env::set_var("XDG_DATA_HOME", tmp.join("data"));
+    std::env::set_var("KADE_DATA_HOME", tmp.join("data"));
     std::env::set_var("KADE_KNOWN_HOSTS", tmp.join("known_hosts"));
     let profile = ServerProfile {
         id: "edit".into(),

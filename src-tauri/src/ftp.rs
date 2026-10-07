@@ -28,6 +28,12 @@ impl From<FtpError> for AppError {
     }
 }
 
+/// The server's "no such file or directory" replies. 450 is what some
+/// servers (ProFTPD) send for a LIST of a folder that doesn't exist.
+fn is_missing(e: &FtpError) -> bool {
+    matches!(e, FtpError::UnexpectedResponse(r) if matches!(r.status, Status::FileUnavailable | Status::RequestFileActionIgnored))
+}
+
 pub struct Ftp {
     conn: Arc<Mutex<AsyncRustlsFtpStream>>,
     /// Server understands MLSD/MLST (exact sizes, dates and types).
@@ -161,7 +167,7 @@ impl Ftp {
         self.conn.lock().await
     }
 
-    async fn raw_list(&self, dir: &str) -> AppResult<Vec<ListFile>> {
+    async fn raw_list(&self, dir: &str) -> Result<Vec<ListFile>, FtpError> {
         let mut c = self.lock().await;
         let files = if self.mlsd {
             c.mlsd(Some(dir)).await?.iter().filter_map(|l| suppaftp::list::ListParser::parse_mlsd(l).ok()).collect()
@@ -216,7 +222,13 @@ impl Ftp {
             Some(i) => (&trimmed[..i], &trimmed[i + 1..]),
             None => (".", trimmed),
         };
-        let Ok(files) = self.raw_list(parent).await else { return Ok(None) };
+        let files = match self.raw_list(parent).await {
+            Ok(files) => files,
+            Err(e) if is_missing(&e) => return Ok(None),
+            // Anything else (a dropped connection, a timeout) must not read as "absent":
+            // an overwrite would then skip the backup.
+            Err(e) => return Err(e.into()),
+        };
         let Some(f) = files.into_iter().find(|f| f.name() == name) else { return Ok(None) };
         let is_dir = if f.is_symlink() { self.is_dir(path).await } else { f.is_directory() };
         Ok(Some(Meta { is_dir, is_symlink: f.is_symlink(), size: f.size() as u64, mtime: unix(f.modified()) }))
