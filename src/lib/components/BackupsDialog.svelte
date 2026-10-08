@@ -137,8 +137,12 @@
           {:else}
             <button
               class="btn"
-              disabled={busy != null || offline}
-              title={offline ? t("Connect to {name} first", { name: tx.server_name ?? "" }) : t("Put the items back where they were")}
+              disabled={busy != null || offline || tx.restored}
+              title={tx.restored
+                ? t("Already restored")
+                : offline
+                  ? t("Connect to {name} first", { name: tx.server_name ?? "" })
+                  : t("Put the items back where they were")}
               onclick={() => restore(tx)}
             >
               {#if busy === tx.id}<LoaderCircle size={14} class="spin" />{:else}<Undo2 size={14} />{/if}

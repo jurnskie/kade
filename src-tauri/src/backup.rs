@@ -700,7 +700,14 @@ pub async fn restore(id: &str, session: Option<&Session>) -> AppResult<Option<Tr
     }
 
     let undoable_adds = tx.entries.iter().any(|e| e.created);
-    let undo = Recorder::new(tx.side, Op::Restore, session, tr!("Restoring: {}", "Terugzetten van: {}", tx.summary));
+    // One prefix level: restoring a restore must not stack "Restoring: Restoring: …".
+    let label = if tx.op == Op::Restore {
+        let original = tx.summary.strip_prefix(&tr!("Undo restore: ", "Terugzetten ongedaan: ")).unwrap_or(&tx.summary);
+        tr!("Undo restore: {}", "Terugzetten ongedaan: {}", original)
+    } else {
+        tr!("Restoring: {}", "Terugzetten van: {}", tx.summary)
+    };
+    let undo = Recorder::new(tx.side, Op::Restore, session, label);
     let moved = async {
         for entry in &tx.entries {
             let occupied = exists(tx.side, session, &entry.original).await?;

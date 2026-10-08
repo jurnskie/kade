@@ -114,6 +114,17 @@ impl AppError {
     }
 }
 
+/// russh and russh-sftp report a dropped channel as "sender dropped" or "channel closed".
+fn closed_or(e: impl std::fmt::Display) -> AppError {
+    let raw = e.to_string();
+    let msg = raw.to_lowercase();
+    if msg.contains("sender dropped") || msg.contains("channel closed") || msg.contains("channel send error") {
+        AppError::Other { message: tr!("The connection was closed", "De verbinding is verbroken") }
+    } else {
+        AppError::Other { message: raw }
+    }
+}
+
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         AppError::other(e)
@@ -122,13 +133,13 @@ impl From<std::io::Error> for AppError {
 
 impl From<russh::Error> for AppError {
     fn from(e: russh::Error) -> Self {
-        AppError::other(e)
+        closed_or(e)
     }
 }
 
 impl From<russh_sftp::client::error::Error> for AppError {
     fn from(e: russh_sftp::client::error::Error) -> Self {
-        AppError::other(e)
+        closed_or(e)
     }
 }
 
@@ -153,6 +164,8 @@ mod tests {
         let e = network_error("h", 2222, "Connection refused (os error 111)");
         assert!(e.to_string().contains("2222"));
         assert!(network_error("h", 22, "No route to host").to_string().contains("Tailscale"));
+        assert_eq!(closed_or("sender dropped").to_string(), tr!("The connection was closed", "De verbinding is verbroken"));
+        assert_eq!(closed_or("iets anders").to_string(), "iets anders");
         assert_eq!(network_error("h", 22, "iets anders").to_string(), "iets anders");
     }
 }

@@ -33,6 +33,7 @@
   import { drag } from "$lib/drag.svelte";
   import { t, tn } from "$lib/i18n.svelte";
   import { collator, formatDate, formatSize, parentPath } from "$lib/format";
+  import { claimMenu } from "$lib/modals";
   import Modal from "./Modal.svelte";
 
   let {
@@ -133,13 +134,42 @@
     const inHome = home && (path === home || path.startsWith(home + "/"));
     const base = inHome ? home : "";
     const rest = (inHome ? path.slice(home.length) : path).split("/").filter(Boolean);
-    const out = [{ name: inHome ? "~" : "/", path: inHome ? home : "/" }];
+    const out: { name: string; path: string; gap?: boolean }[] = [{ name: inHome ? "~" : "/", path: inHome ? home : "/" }];
     let acc = base;
     for (const part of rest) {
       acc = `${acc}/${part}`;
       out.push({ name: part, path: acc });
     }
     return out;
+  });
+
+  // Earlier segments collapse into one "…" (middle ones first) until the bar fits;
+  // the current folder is never shrunk unless it alone is wider than the bar.
+  let crumbEl = $state<HTMLElement>();
+  let crumbW = $state(0);
+  let collapsed = $state(0);
+  const shown = $derived.by(() => {
+    // `collapsed` can be stale for a moment after the path changed.
+    const n = Math.min(collapsed, crumbs.length - 2);
+    if (n <= 0) return crumbs;
+    const gap = { name: "…", path: crumbs[n].path, gap: true };
+    return [crumbs[0], gap, ...crumbs.slice(n + 1)];
+  });
+  $effect(() => {
+    void crumbs;
+    void crumbW;
+    const el = crumbEl;
+    if (!el) return;
+    let cancelled = false;
+    (async () => {
+      collapsed = 0;
+      await tick();
+      while (!cancelled && el.scrollWidth > el.clientWidth && collapsed < crumbs.length - 2) {
+        collapsed++;
+        await tick();
+      }
+    })();
+    return () => (cancelled = true);
   });
 
   $effect(() => {
@@ -254,6 +284,11 @@
   let pendingSelect: string | null = null;
   let nameInput = $state<HTMLInputElement>();
   let menuEl = $state<HTMLDivElement>();
+  const menuOpen = $derived(menu !== null);
+  // Only one context menu app-wide (the other pane's closes), and Escape closes it.
+  $effect(() => {
+    if (menuOpen) return claimMenu(() => (menu = null));
+  });
 
   async function openMenu(e: MouseEvent, entry: Entry | null, index = -1) {
     e.preventDefault();
@@ -384,11 +419,7 @@
   }
 </script>
 
-<svelte:window
-  onclick={() => (menu = null)}
-  onblur={() => (menu = null)}
-  onkeydown={(e) => e.key === "Escape" && (menu = null)}
-/>
+<svelte:window onclick={() => (menu = null)} onblur={() => (menu = null)} />
 
 <!-- Focusable so Delete/F2/Enter work on the selection. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -398,10 +429,10 @@
       <Icon size={16} color={accent ? "var(--pine)" : "var(--ink2)"} />
       <em class:accent>{label}</em>
     </div>
-    <nav class="crumb mono">
-      {#each crumbs as c, i (c.path)}
-        {#if i > 0 && crumbs[i - 1].name !== "/"}<span class="sep">/</span>{/if}
-        <button class:last={i === crumbs.length - 1} title={c.path} onclick={() => go(c.path)}>{c.name}</button>
+    <nav class="crumb mono" class:tight={collapsed >= crumbs.length - 2 && collapsed > 0} bind:this={crumbEl} bind:clientWidth={crumbW}>
+      {#each shown as c, i (c.path + (c.gap ? "…" : ""))}
+        {#if i > 0 && shown[i - 1].name !== "/"}<span class="sep">/</span>{/if}
+        <button class:last={i === shown.length - 1} title={c.path} onclick={() => go(c.path)}>{c.name}</button>
       {/each}
     </nav>
     <div class="tools">
@@ -612,6 +643,10 @@
     position: fixed;
     z-index: 40;
     min-width: 210px;
+    width: max-content;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    white-space: nowrap;
     background: var(--paper);
     border: 1px solid var(--mist);
     border-radius: 10px;
@@ -670,7 +705,11 @@
   p {
     color: var(--ink2);
     line-height: 1.5;
-    word-break: break-all;
+  }
+  /* Only paths and file names may break mid-word. */
+  p .mono,
+  p.where {
+    overflow-wrap: anywhere;
   }
   p.where {
     font-size: 11.5px;
@@ -739,27 +778,33 @@
     gap: 2px;
     font-size: 12px;
     color: var(--lichen);
+    /* Width independent of the content, so collapsing segments can't change what is measured. */
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
   }
-  /* Earlier segments shrink (to an ellipsis) long before the current folder does. */
   .crumb button {
     padding: 2px 3px;
     border-radius: 4px;
-    flex: 0 10 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: none;
   }
   .crumb button:hover {
     background: var(--mist2);
     color: var(--granite);
   }
+  /* Capped at the bar's width, so the measurement sees the overflow of the segments before it. */
   .crumb button.last {
-    flex-shrink: 1;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--granite);
     font-weight: 500;
+  }
+  /* Nothing left to collapse: the current folder gives way, the rest stays. */
+  .crumb.tight button.last {
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .sep {
     flex: none;

@@ -11,6 +11,8 @@ use serde::Serialize;
 use crate::error::{network_error, AppError, AppResult};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a server gets to answer the SFTP subsystem request and handshake.
+const SFTP_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 use crate::fs::Entry;
 use crate::profiles::{Auth, Protocol, ServerProfile};
 use crate::remote::RemoteFs;
@@ -437,14 +439,37 @@ async fn connect_ssh(
 }
 
 async fn open_sftp(handle: &Handle<Client>) -> AppResult<SftpSession> {
-    let channel = handle.channel_open_session().await?;
+    let mut channel = handle.channel_open_session().await?;
     channel.request_subsystem(true, "sftp").await?;
+    // Without waiting for the reply, a server lacking the subsystem leaves the SFTP handshake hanging forever.
+    let no_sftp = || {
+        AppError::other(tr!(
+            "This server doesn't offer SFTP. Choose SSH (terminal only) for this connection.",
+            "Deze server biedt geen SFTP. Kies SSH (alleen terminal) voor deze verbinding."
+        ))
+    };
+    let reply = tokio::time::timeout(SFTP_OPEN_TIMEOUT, async {
+        loop {
+            match channel.wait().await {
+                Some(russh::ChannelMsg::Success) => return true,
+                Some(russh::ChannelMsg::Failure) | None => return false,
+                Some(_) => {}
+            }
+        }
+    })
+    .await;
+    if !matches!(reply, Ok(true)) {
+        return Err(no_sftp());
+    }
     // 64 writes of 32 KiB in flight, like OpenSSH's sftp: the default 16 caps
     // uploads at 512 KiB per round trip. 32 KiB is the size every server accepts.
     // The request timeout (10 s by default) starts when a request is queued, not sent: with many
     // files of 64 writes each queued on a slow uplink, the default fails healthy uploads and listings.
     let config = russh_sftp::client::Config { max_concurrent_writes: 64, request_timeout_secs: 120, ..Default::default() };
-    Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
+    match tokio::time::timeout(SFTP_OPEN_TIMEOUT, SftpSession::new_with_config(channel.into_stream(), config)).await {
+        Ok(sftp) => Ok(sftp?),
+        Err(_) => Err(no_sftp()),
+    }
 }
 
 pub fn join_remote(dir: &str, name: &str) -> String {

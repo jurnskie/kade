@@ -4,6 +4,8 @@
   import { formatSize } from "$lib/format";
   import { transfers, isFinished, canPause } from "$lib/transfers.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { tick } from "svelte";
+  import Modal from "./Modal.svelte";
 
   let {
     sessionId,
@@ -19,6 +21,36 @@
     files: active.reduce((n, j) => n + j.files_total, 0),
     bytes: active.reduce((n, j) => n + j.bytes_total, 0),
   });
+
+  let confirming = $state<Progress | null>(null);
+  let listEl = $state<HTMLDivElement>();
+
+  // Rows stay where they are (oldest first, new jobs at the end), so a click aimed at one
+  // row can't land on another. The list only follows new jobs while nobody is pointing at it.
+  let seen = 0;
+  $effect(() => {
+    const n = jobs.length;
+    if (n > seen && listEl && !listEl.matches(":hover")) tick().then(() => listEl?.scrollTo({ top: listEl.scrollHeight }));
+    seen = n;
+  });
+
+  const norm = (p: string) => p.replace(/\/+$/, "");
+  const overlaps = (a: string, b: string) => {
+    [a, b] = [norm(a), norm(b)];
+    return a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+  };
+  /** The unfinished job (if any) writing to the same place a restore of `j` would touch. */
+  const running = (j: Progress) => active.find((a) => a.id !== j.id && overlaps(a.dest, j.dest));
+
+  function askRestore(j: Progress) {
+    if (!running(j)) confirming = j;
+  }
+
+  function confirmRestore() {
+    const id = confirming?.backup_id;
+    confirming = null;
+    if (id) onrestore(id);
+  }
 
   function pct(j: Progress) {
     if (j.state === "done") return 100;
@@ -76,8 +108,8 @@
       </div>
     </div>
     {#if open}
-      <div class="list">
-        {#each jobs.toReversed() as j (j.id)}
+      <div class="list" bind:this={listEl}>
+        {#each jobs as j (j.id)}
           <div class="qr" class:fail={j.state === "failed"}>
             <span class="dir">
               {#if j.state === "done"}<CircleCheck size={16} color="var(--pine)" />
@@ -108,7 +140,17 @@
                 {/if}
                 <button class="ic" title={t("Cancel")} onclick={() => act(api.transferCancel(j.id))}><X size={15} /></button>
               {:else if j.backup_id}
-                <button class="ic" title={j.kind === "sync" ? t("Restore files replaced or deleted by the sync") : t("Restore overwritten files")} onclick={() => onrestore(j.backup_id!)}>
+                {@const busy = running(j)}
+                <button
+                  class="ic"
+                  aria-disabled={busy ? "true" : undefined}
+                  title={busy
+                    ? t("A transfer to {dest} is still running. Restore once it has finished.", { dest: busy.dest })
+                    : j.kind === "sync"
+                      ? t("Restore files replaced or deleted by the sync")
+                      : t("Restore overwritten files")}
+                  onclick={() => askRestore(j)}
+                >
                   <ArchiveRestore size={15} />
                 </button>
               {/if}
@@ -118,6 +160,23 @@
       </div>
     {/if}
   </div>
+{/if}
+
+{#if confirming}
+  <Modal width={460} pad="22px 24px 18px" gap={12} onclose={() => (confirming = null)}>
+    <h3>{t("Restore files?")}</h3>
+    <p>
+      {#if confirming.kind === "sync"}
+        {t("Restore puts the files that the sync of {name} replaced or deleted back in {dest}, and moves the files it added aside. You can undo this from Backups.", { name: confirming.name, dest: confirming.dest })}
+      {:else}
+        {t("Restore puts the files that {name} overwrote in {dest} back. You can undo this from Backups.", { name: confirming.name, dest: confirming.dest })}
+      {/if}
+    </p>
+    <div class="ca">
+      <button class="btn ghost" onclick={() => (confirming = null)}>{t("Cancel")}</button>
+      <button class="btn pri" onclick={confirmRestore}>{t("Restore")}</button>
+    </div>
+  </Modal>
 {/if}
 
 <style>
@@ -165,6 +224,28 @@
   }
   .ic:hover {
     background: var(--mist2);
+  }
+  .ic[aria-disabled="true"] {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .ic[aria-disabled="true"]:hover {
+    background: none;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  p {
+    color: var(--ink2);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .ca {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
   }
   .list {
     max-height: 190px;
