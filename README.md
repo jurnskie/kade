@@ -5,7 +5,7 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
 ![Kade with a local folder and a website on the server side by side](docs/screenshots/main.png)
 
 - **Workspaces** (say, Home and Work) with groups of connections, each with its own colour and default
-  1Password account. Every computer remembers its own active workspace (Ctrl 1–9).
+  1Password account, vault and SSH key (connections without a key of their own try only that one). Every computer remembers its own active workspace (Ctrl 1–9).
 - **SFTP, SSH, FTP and FTPS** (explicit on port 21, implicit on 990).
 - **Two panes**, local and server, with drag and drop and a right-click menu: new file or folder, rename,
   delete, edit.
@@ -15,9 +15,13 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
 - **Status**: CPU, memory, disks and the busiest processes of a server, refreshed live.
 - **Edit in your own editor**: double-click a server file and Kade uploads it every time you save.
 - **Backups of everything Kade deletes or overwrites**, kept for a configurable number of days and restorable
-  with one click.
+  with one click. They are journaled as they happen, so a crash mid-transfer loses nothing, and unsaved edits are kept too.
 - **Sign in** with the 1Password SSH agent, ssh-agent, a key file, a password from 1Password (through the `op`
   CLI) or a password you type (never stored). Host keys are checked against `~/.ssh/known_hosts`.
+- **Sync folder** over rsync: right-click a folder and choose Sync to or from the server. Kade previews every
+  change first, can delete extra files at the destination, and puts everything it overwrites or deletes in
+  Backups. It runs over Kade's own SSH connection, so 1Password and agent sign-in keep working. Needs rsync on
+  both ends.
 - **Sync** connections and settings between computers through a folder your sync client keeps in step
   (Syncthing, iCloud Drive, Synology Drive, …). Passwords are never written to it.
 - **MCP server** inside the app (Settings → AI assistants), so an assistant such as Claude Code can add, change,
@@ -25,7 +29,8 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
 - **Import** connections from `~/.ssh/config`, Cyberduck, FileZilla and Transmit (Settings → Import). Passwords
   are never imported.
 - **Updates** from inside the app (Settings → About Kade).
-- **Light and dark**, following the system or chosen in Settings → Appearance.
+- **Light and dark**, following the system or chosen in Settings, with four colour themes (Pine, Haven, Duin and
+  Schemer). The terminal follows the theme.
 - **English and Dutch**, chosen automatically or in Settings → Language.
 
 <table>
@@ -44,6 +49,14 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
   <tr>
     <td align="center"><sub>Tunnels, in dark mode</sub></td>
     <td align="center"><sub>Live server status</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/sync.png" alt="Sync folder dialog with a preview of new, updated and deleted files"></td>
+    <td><img src="docs/screenshots/themes.png" alt="Settings with the colour themes Pine, Haven, Duin and Schemer"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Sync a folder, after a preview</sub></td>
+    <td align="center"><sub>Four colour themes, light and dark</sub></td>
   </tr>
 </table>
 

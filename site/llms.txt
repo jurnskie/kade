@@ -7,10 +7,11 @@ Key facts:
 - Platforms: macOS (universal build for Apple Silicon and Intel) and Linux (AppImage, .deb). Not available for Windows.
 - Protocols: SFTP, SSH, FTP, FTPS (explicit TLS on port 21, implicit TLS on port 990).
 - Two panes (local and server) with drag and drop, a built-in SSH terminal (xterm.js), SSH port tunnels (local forwards like `ssh -L`), live server status (CPU, memory, disks, processes) and editing server files in your own editor.
-- Backups of everything Kade deletes or overwrites, restorable with one click.
-- Sign-in: 1Password SSH agent, ssh-agent, a key file, a password from 1Password via the `op` CLI, or a typed password. Passwords are never stored. Host keys are checked against `~/.ssh/known_hosts`.
+- Backups of everything Kade deletes or overwrites, restorable with one click. Backups are journaled as they happen, so they survive a crash mid-transfer, and unsaved edits are kept there too.
+- Sync folder over rsync: "Sync to/from server" on a folder shows a preview of every change first, can optionally delete extra files at the destination, and sends everything it overwrites or deletes to Backups. It runs over Kade's own SSH connection, so 1Password and agent sign-in keep working. rsync must be installed on both ends.
+- Sign-in: 1Password SSH agent, ssh-agent, a key file, a password from 1Password via the `op` CLI, or a typed password. Passwords are never stored. A workspace can set a default 1Password vault and SSH key: connections without a key of their own then try only that key (or only that vault's keys), which avoids "Too many authentication failures". Host keys are checked against `~/.ssh/known_hosts`.
 - Import: `~/.ssh/config`, Cyberduck bookmarks, FileZilla Site Manager and Transmit exports.
-- Workspaces (for example Home and Work), sync between computers through a folder (Syncthing, iCloud Drive, Synology Drive), an optional built-in MCP server for AI assistants, in-app updates, light and dark mode, English and Dutch.
+- Workspaces (for example Home and Work), sync between computers through a folder (Syncthing, iCloud Drive, Synology Drive), an optional built-in MCP server for AI assistants, in-app updates, light and dark mode with four colour themes (Pine, Haven, Duin, Schemer; the terminal follows the theme), English and Dutch.
 - No account, no cloud service and no telemetry.
 
 ## Links
