@@ -9,6 +9,7 @@
   import AgentKeys from "./AgentKeys.svelte";
   import OnePasswordPicker from "./OnePasswordPicker.svelte";
   import type { OnePassword } from "./onepassword.svelte";
+  import { radioGroup } from "./radioGroup";
 
   let {
     op,
@@ -32,10 +33,16 @@
   } = $props();
 </script>
 
-<div class="auth">
+<div class="auth" role="radiogroup" aria-label={t("Log in with")} use:radioGroup>
   {#if !isFtp}
     <div class="opt" class:on={choice === "one_password"}>
-      <button class="head" onclick={() => ((choice = "one_password"), (pinned = null), (keyItem = null))}>
+      <button
+        class="head"
+        role="radio"
+        aria-checked={choice === "one_password"}
+        tabindex={choice === "one_password" ? 0 : -1}
+        onclick={() => ((choice = "one_password"), (pinned = null), (keyItem = null))}
+      >
         <span class="r"></span>
         <span class="t">
           <b><OnePasswordIcon size={16} />1Password <span class="tag">{t("RECOMMENDED")}</span></b>
@@ -53,7 +60,13 @@
     </div>
 
     <div class="opt" class:on={choice === "agent" || choice === "key_file"}>
-      <button class="head" onclick={() => ((choice = "agent"), (pinned = null))}>
+      <button
+        class="head"
+        role="radio"
+        aria-checked={choice === "agent" || choice === "key_file"}
+        tabindex={choice === "agent" || choice === "key_file" ? 0 : -1}
+        onclick={() => ((choice = "agent"), (pinned = null))}
+      >
         <span class="r"></span>
         <span class="t">
           <b><KeyRound size={16} color="var(--ink2)" />{t("SSH key")}</b>
@@ -62,9 +75,11 @@
       </button>
       {#if choice === "agent" || choice === "key_file"}
         <div class="sub">
-          <div class="seg">
-            <button class:on={choice === "agent"} onclick={() => (choice = "agent")}>ssh-agent</button>
-            <button class:on={choice === "key_file"} onclick={() => (choice = "key_file")}>{t("File")}</button>
+          <div class="seg" role="group" aria-label={t("SSH key")}>
+            <button class:on={choice === "agent"} aria-pressed={choice === "agent"} onclick={() => (choice = "agent")}>ssh-agent</button>
+            <button class:on={choice === "key_file"} aria-pressed={choice === "key_file"} onclick={() => (choice = "key_file")}>
+              {t("File")}
+            </button>
           </div>
           {#if choice === "agent"}
             <AgentKeys method="agent" bind:pinned />
@@ -78,7 +93,13 @@
   {/if}
 
   <div class="opt" class:on={choice === "one_password_secret"}>
-    <button class="head" onclick={() => (choice = "one_password_secret")}>
+    <button
+      class="head"
+      role="radio"
+      aria-checked={choice === "one_password_secret"}
+      tabindex={choice === "one_password_secret" ? 0 : -1}
+      onclick={() => (choice = "one_password_secret")}
+    >
       <span class="r"></span>
       <span class="t">
         <b>
@@ -94,7 +115,13 @@
   </div>
 
   <div class="opt" class:on={choice === "password"}>
-    <button class="head" onclick={() => (choice = "password")}>
+    <button
+      class="head"
+      role="radio"
+      aria-checked={choice === "password"}
+      tabindex={choice === "password" ? 0 : -1}
+      onclick={() => (choice = "password")}
+    >
       <span class="r"></span>
       <span class="t">
         <b><RectangleEllipsis size={16} color="var(--ink2)" />{t("Password")}</b>

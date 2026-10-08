@@ -214,6 +214,17 @@ fn failed(e: impl std::fmt::Display) -> ToolResult {
     Err(e.into())
 }
 
+/// Reachability-only test for connections whose login needs a 1Password secret.
+async fn reachability(profile: &ServerProfile) -> serde_json::Value {
+    let connect = tokio::net::TcpStream::connect((profile.host.as_str(), profile.port));
+    let note = "Only reachability was checked: Kade does not read 1Password secrets for MCP requests. Test the sign-in in Kade itself.";
+    match tokio::time::timeout(std::time::Duration::from_secs(10), connect).await {
+        Ok(Ok(_)) => serde_json::json!({ "ok": true, "reachable": true, "login_tested": false, "note": note }),
+        Ok(Err(e)) => serde_json::json!({ "ok": false, "reachable": false, "error": e.to_string() }),
+        Err(_) => serde_json::json!({ "ok": false, "reachable": false, "error": "Connection timed out" }),
+    }
+}
+
 fn default_port(protocol: Protocol) -> u16 {
     match protocol {
         Protocol::Sftp | Protocol::Ssh => 22,
@@ -267,7 +278,9 @@ impl KadeMcp {
         Self { app, tool_router: Self::tool_router() }
     }
 
-    #[tool(description = "List the workspaces (e.g. Home, Work), each with its default 1Password account and number of connections.")]
+    #[tool(
+        description = "List the workspaces (e.g. Home, Work), each with its default 1Password account, vault and SSH key, and number of connections."
+    )]
     async fn list_workspaces(&self) -> ToolResult {
         let data = store::load()?;
         json(
@@ -275,7 +288,7 @@ impl KadeMcp {
                 .iter()
                 .map(|w| {
                     let n = data.servers.iter().filter(|s| in_workspace(s, &w.id)).count();
-                    serde_json::json!({ "id": w.id, "name": w.name, "color": w.color, "op_account": w.op_account, "connections": n })
+                    serde_json::json!({ "id": w.id, "name": w.name, "color": w.color, "op_account": w.op_account, "op_vault": w.op_vault, "op_key_fingerprint": w.op_key_fingerprint, "op_key_item": w.op_key_item, "connections": n })
                 })
                 .collect::<Vec<_>>(),
         )
@@ -442,10 +455,15 @@ impl KadeMcp {
     }
 
     #[tool(
-        description = "Try to log in with a saved connection and report the result, without opening it in the app. Connections with method 'password' cannot be tested this way. An unknown host key is reported, never trusted automatically: the user must open the connection in Kade and check the fingerprint."
+        description = "Try to log in with a saved connection and report the result, without opening it in the app. Connections with method 'password' cannot be tested this way. Connections with method 'one_password_secret' are only checked for reachability (TCP connect): Kade never reads a 1Password secret for a request from here, so the user must test the sign-in in Kade itself. An unknown host key is reported, never trusted automatically: the user must open the connection in Kade and check the fingerprint."
     )]
     async fn test_connection(&self, Parameters(p): Parameters<IdParam>) -> ToolResult {
         let profile = self.find(&p.id)?;
+        // Host, user and protocol can be set through MCP, so a password secret must
+        // never be read and sent to the server from here.
+        if matches!(profile.auth, Auth::OnePasswordSecret { .. }) {
+            return json(reachability(&profile).await);
+        }
         match crate::ssh::connect(&profile, None, None).await {
             Ok((session, connected)) => {
                 if let Some(fs) = &session.fs {
@@ -533,9 +551,12 @@ impl ServerHandler for KadeMcp {
             .with_instructions(
                 "Kade is the user's SFTP/SSH/FTP manager. Connections live in groups inside workspaces \
                  (e.g. Home, Work); a 'site' is a connection whose remote_path is the site's folder. \
-                 A workspace's op_account is used for 1Password unless the connection names its own. Never store plain passwords: use \
+                 A workspace's op_account is used for 1Password unless the connection names its own; \
+                 a one_password connection without a key of its own uses only the workspace's default key \
+                 (op_key_fingerprint), or only the keys in its default vault (op_vault). Never store plain passwords: use \
                  one_password (SSH key) or one_password_secret (1Password item reference), or \
-                 'password' to have Kade ask at connect time. Check list_connections before adding \
+                 'password' to have Kade ask at connect time. test_connection never reads 1Password \
+                 secrets: for one_password_secret it only checks that the host is reachable. Check list_connections before adding \
                  to avoid duplicates.",
             )
     }
@@ -566,9 +587,31 @@ pub struct McpServer {
     error: Mutex<Option<String>>,
 }
 
-async fn require_token(AxumState(token): AxumState<Arc<RwLock<String>>>, req: Request, next: Next) -> Response {
+/// Compare without bailing out at the first differing byte.
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    for i in 0..a.len().max(b.len()) {
+        diff |= (a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0)) as usize;
+    }
+    diff == 0
+}
+
+/// DNS-rebinding defence: only our own loopback names are accepted.
+fn host_allowed(host: Option<&str>, port: u16) -> bool {
+    host.is_some_and(|h| {
+        let h = h.to_ascii_lowercase();
+        h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}")
+    })
+}
+
+async fn require_token(AxumState((token, port)): AxumState<(Arc<RwLock<String>>, u16)>, req: Request, next: Next) -> Response {
+    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok());
+    if !host_allowed(host, port) {
+        return Response::builder().status(StatusCode::FORBIDDEN).body("forbidden".into()).unwrap();
+    }
     let given = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-    if given != Some(token.read().unwrap().as_str()) {
+    let ok = given.is_some_and(|g| constant_time_eq(g.as_bytes(), token.read().unwrap().as_bytes()));
+    if !ok {
         return Response::builder().status(StatusCode::UNAUTHORIZED).body("unauthorized".into()).unwrap();
     }
     next.run(req).await
@@ -618,8 +661,9 @@ impl McpServer {
             Arc::new(LocalSessionManager::default()),
             config,
         );
-        let router =
-            axum::Router::new().nest_service("/mcp", service).layer(middleware::from_fn_with_state(self.token.clone(), require_token));
+        let router = axum::Router::new()
+            .nest_service("/mcp", service)
+            .layer(middleware::from_fn_with_state((self.token.clone(), cfg.mcp_port), require_token));
 
         // Bind here, not in the task, so a busy port is reported in the settings.
         let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -656,4 +700,29 @@ pub fn regenerate_token() -> Result<(), AppError> {
 
 fn new_token() -> String {
     format!("kade_{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_compares_whole_value() {
+        assert!(constant_time_eq(b"kade_abc", b"kade_abc"));
+        assert!(!constant_time_eq(b"kade_abc", b"kade_abd"));
+        assert!(!constant_time_eq(b"kade_abc", b"kade_ab"));
+        assert!(!constant_time_eq(b"", b"x"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn host_header_must_be_loopback_with_port() {
+        assert!(host_allowed(Some("127.0.0.1:7777"), 7777));
+        assert!(host_allowed(Some("localhost:7777"), 7777));
+        assert!(host_allowed(Some("LocalHost:7777"), 7777));
+        assert!(!host_allowed(Some("evil.example:7777"), 7777));
+        assert!(!host_allowed(Some("127.0.0.1:8888"), 7777));
+        assert!(!host_allowed(Some("127.0.0.1"), 7777));
+        assert!(!host_allowed(None, 7777));
+    }
 }

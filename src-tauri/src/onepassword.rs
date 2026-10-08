@@ -3,6 +3,10 @@
 //! the account they belong to: on a machine signed in to several accounts
 //! (work and personal), `op` would otherwise pick its default account.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +69,7 @@ pub struct OpItem {
     pub reference: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct OpSshKey {
     pub title: String,
     pub vault: String,
@@ -76,20 +80,98 @@ pub struct OpSshKey {
     pub item: String,
 }
 
+/// Long enough for a human to find the 1Password prompt and approve it.
+const OP_TIMEOUT: Duration = Duration::from_secs(90);
+
 async fn op_raw(args: &[&str], account: Option<&str>) -> AppResult<String> {
     let mut cmd = crate::hostenv::async_command("op");
     cmd.args(args);
     if let Some(account) = account.filter(|a| !a.is_empty()) {
         cmd.args(["--account", account]);
     }
-    let out = cmd.output().await.map_err(|e| AppError::AgentUnavailable {
+    // An unanswered approval would otherwise hang forever; dropping the future on timeout kills `op`.
+    cmd.kill_on_drop(true);
+    let out = match tokio::time::timeout(OP_TIMEOUT, cmd.output()).await {
+        Ok(out) => out,
+        Err(_) => return Err(AppError::OnePassword { message: friendly(OpFailure::TimedOut) }),
+    }
+    .map_err(|e| AppError::AgentUnavailable {
         message: tr!("1Password CLI (op) not found: {e}", "1Password CLI (op) niet gevonden: {e}", e = e),
     })?;
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(AppError::AuthFailed { message: format!("1Password: {err}") });
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(AppError::OnePassword { message: friendly(classify(&err)) });
     }
     String::from_utf8(out.stdout).map_err(AppError::other)
+}
+
+#[derive(Debug, PartialEq)]
+enum OpFailure {
+    TimedOut,
+    Dismissed,
+    NotSignedIn,
+    AccountNotFound,
+    Other(String),
+}
+
+/// `op` prefixes every error line with `[ERROR] 2026/10/08 12:00:00 `.
+fn strip_prefix(line: &str) -> &str {
+    let Some(rest) = line.trim().strip_prefix("[ERROR]") else { return line.trim() };
+    let mut rest = rest.trim_start();
+    for _ in 0..2 {
+        match rest.split_once(' ') {
+            Some((tok, tail)) if !tok.is_empty() && tok.chars().all(|c| c.is_ascii_digit() || c == '/' || c == ':') => {
+                rest = tail.trim_start()
+            }
+            _ => break,
+        }
+    }
+    rest
+}
+
+fn classify(stderr: &str) -> OpFailure {
+    let text = stderr.lines().map(strip_prefix).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    let lower = text.to_lowercase();
+    if lower.contains("prompt dismissed") || lower.contains("authorization denied") || lower.contains("authorization timeout") {
+        OpFailure::Dismissed
+    } else if lower.contains("not signed in")
+        || lower.contains("not currently signed in")
+        || lower.contains("no accounts configured")
+        || lower.contains("sign in again")
+    {
+        OpFailure::NotSignedIn
+    } else if lower.contains("account not found")
+        || lower.contains("does not match a configured account")
+        || lower.contains("isn't a signed-in account")
+        || lower.contains("no account found")
+    {
+        OpFailure::AccountNotFound
+    } else {
+        OpFailure::Other(text)
+    }
+}
+
+fn friendly(failure: OpFailure) -> String {
+    match failure {
+        OpFailure::TimedOut => tr!(
+            "1Password didn't answer in time — approve the prompt and try again.",
+            "1Password reageerde niet op tijd — keur de melding goed en probeer het opnieuw."
+        ),
+        OpFailure::Dismissed => tr!(
+            "The 1Password prompt was dismissed — approve it to continue and try again.",
+            "De 1Password-melding is weggedrukt — keur hem goed om door te gaan en probeer het opnieuw."
+        ),
+        OpFailure::NotSignedIn => tr!(
+            "You're not signed in to 1Password. Unlock the 1Password app (with CLI integration on) and try again.",
+            "Je bent niet ingelogd bij 1Password. Ontgrendel de 1Password-app (met CLI-integratie aan) en probeer het opnieuw."
+        ),
+        OpFailure::AccountNotFound => tr!(
+            "That 1Password account wasn't found. Check the account in Settings → 1Password.",
+            "Dat 1Password-account is niet gevonden. Controleer het account in Instellingen → 1Password."
+        ),
+        OpFailure::Other(m) if m.is_empty() => tr!("1Password failed", "1Password mislukte"),
+        OpFailure::Other(m) => tr!("1Password: {m}", "1Password: {m}", m = m),
+    }
 }
 
 pub async fn accounts() -> AppResult<Vec<OpAccount>> {
@@ -126,8 +208,30 @@ pub async fn items(account: Option<&str>, vault: Option<&str>) -> AppResult<Vec<
     Ok(out)
 }
 
-/// SSH key items with their fingerprints (no private keys are read).
+const SSH_KEYS_TTL: Duration = Duration::from_secs(600);
+
+type SshKeysCache = HashMap<(String, String), (Instant, Vec<OpSshKey>)>;
+
+fn ssh_keys_cache() -> &'static Mutex<SshKeysCache> {
+    static CACHE: OnceLock<Mutex<SshKeysCache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// SSH key items with their fingerprints (no private keys are read). Results are
+/// cached per (account, vault) for a few minutes, as every connect asks for them.
 pub async fn ssh_keys(account: Option<&str>, vault: Option<&str>) -> AppResult<Vec<OpSshKey>> {
+    let key = (account.unwrap_or_default().to_string(), vault.unwrap_or_default().to_string());
+    if let Some((at, keys)) = ssh_keys_cache().lock().unwrap().get(&key) {
+        if at.elapsed() < SSH_KEYS_TTL {
+            return Ok(keys.clone());
+        }
+    }
+    let keys = fetch_ssh_keys(account, vault).await?;
+    ssh_keys_cache().lock().unwrap().insert(key, (Instant::now(), keys.clone()));
+    Ok(keys)
+}
+
+async fn fetch_ssh_keys(account: Option<&str>, vault: Option<&str>) -> AppResult<Vec<OpSshKey>> {
     let mut args = vec!["item", "list", "--categories", "SSH Key", "--format", "json"];
     if let Some(v) = vault.filter(|v| !v.is_empty()) {
         args.extend(["--vault", v]);
@@ -185,6 +289,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strips_op_error_prefix() {
+        assert_eq!(strip_prefix("[ERROR] 2026/10/08 12:00:00 authorization prompt dismissed"), "authorization prompt dismissed");
+        assert_eq!(strip_prefix("plain message"), "plain message");
+        assert_eq!(strip_prefix("[ERROR] 2026/10/08 12:00:00 2026 is a year"), "2026 is a year");
+    }
+
+    #[test]
+    fn classifies_op_errors() {
+        let c = |s| classify(s);
+        assert_eq!(c("[ERROR] 2026/10/08 12:00:00 authorization prompt dismissed"), OpFailure::Dismissed);
+        assert_eq!(c("[ERROR] 2026/10/08 12:00:00 You are not currently signed in. Please run `op signin`"), OpFailure::NotSignedIn);
+        assert_eq!(c("[ERROR] 2026/10/08 12:00:00 account is not signed in"), OpFailure::NotSignedIn);
+        assert_eq!(c("[ERROR] 2026/10/08 12:00:00 \"x\" does not match a configured account"), OpFailure::AccountNotFound);
+        assert_eq!(c("[ERROR] 2026/10/08 12:00:00 something odd\n"), OpFailure::Other("something odd".into()));
+        assert!(!friendly(OpFailure::TimedOut).is_empty());
+    }
+
+    #[test]
     fn parses_item_list() {
         let raw = r#"[{"id":"i1","title":"Beelink","vault":{"id":"v1","name":"Homelab"},
                       "additional_information":"deploy","urls":[{"href":"ssh://10.0.0.20"}]},
@@ -208,7 +330,7 @@ mod tests {
                 let pem = read_ssh_key(&k.item, Some(&account.id)).await.unwrap();
                 let key = russh::keys::decode_secret_key(&pem, None).unwrap();
                 let fp = crate::ssh::fingerprint(key.public_key());
-                eprintln!("OP   eerste sleutel: vingerafdruk klopt = {}", fp == k.fingerprint);
+                eprintln!("OP   first key: fingerprint matches = {}", fp == k.fingerprint);
                 assert_eq!(fp, k.fingerprint);
             }
         }

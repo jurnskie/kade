@@ -5,11 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kade</title>
     <script>
-      // Apply the stored theme before the first paint (see src/lib/theme.svelte.ts).
+      // Apply the stored mode and palette before the first paint (see src/lib/theme.svelte.ts).
       try {
-        const t = localStorage.getItem("kade.theme");
-        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-      } catch {}
+        const root = document.documentElement;
+        const mode = localStorage.getItem("kade.theme");
+        const dark = mode === "dark" || (mode !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        const palette = localStorage.getItem("kade.palette");
+        root.dataset.scheme = dark ? "dark" : "light";
+        // Palette ids: keep in sync with PALETTES in theme.svelte.ts.
+        root.dataset.palette = ["pine", "haven", "duin", "schemer"].includes(palette) ? palette : "pine";
+      } catch {
+        document.documentElement.dataset.scheme = "light";
+        document.documentElement.dataset.palette = "pine";
+      }
     </script>
     %sveltekit.head%
   </head>

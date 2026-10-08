@@ -2,21 +2,24 @@ import type { ServerProfile, Workspace } from "./api";
 
 export const DEFAULT_WORKSPACE = "default";
 
-/** Workspace colours. `tint` (backgrounds) and `ink` (text) are mixed with the
- *  current theme's surface and text colours, so they work in light and dark. */
-const swatch = (label: string, color: string) => ({
+/** Workspace colours. The dots are CSS tokens (--ws-*, --on-ws-*) with a light
+ *  and a dark variant in themes.css. `tint` (backgrounds) and `ink` (text) are
+ *  mixed with the current theme's surface and text colours, so they work in
+ *  every palette. `onColor` is the text colour on top of a `color` fill. */
+const swatch = (key: string, label: string) => ({
   label,
-  color,
-  tint: `color-mix(in srgb, ${color} 16%, var(--paper))`,
-  ink: `color-mix(in srgb, ${color} 72%, var(--granite))`,
+  color: `var(--ws-${key})`,
+  onColor: `var(--on-ws-${key})`,
+  tint: `color-mix(in srgb, var(--ws-${key}) 16%, var(--paper))`,
+  ink: `color-mix(in srgb, var(--ws-${key}) 78%, var(--granite))`,
 });
-export const WORKSPACE_COLORS: Record<string, { label: string; color: string; tint: string; ink: string }> = {
-  pine: swatch("Pine", "#1d6b57"),
-  blue: swatch("Fjord", "#2f6fb0"),
-  amber: swatch("Amber", "#b7791f"),
-  plum: swatch("Plum", "#8a4f8f"),
-  coral: swatch("Coral", "#c2553f"),
-  slate: swatch("Slate", "#4a524e"),
+export const WORKSPACE_COLORS: Record<string, { label: string; color: string; onColor: string; tint: string; ink: string }> = {
+  pine: swatch("pine", "Pine"),
+  blue: swatch("blue", "Fjord"),
+  amber: swatch("amber", "Amber"),
+  plum: swatch("plum", "Plum"),
+  coral: swatch("coral", "Coral"),
+  slate: swatch("slate", "Slate"),
 };
 
 export const colorOf = (ws: Workspace | null | undefined) => WORKSPACE_COLORS[ws?.color ?? "pine"] ?? WORKSPACE_COLORS.pine;

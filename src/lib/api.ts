@@ -67,6 +67,13 @@ export interface Workspace {
   name: string;
   color: string;
   op_account: string | null;
+  /** Vault id whose SSH keys connections without a key of their own may use. */
+  op_vault: string | null;
+  /** Default SSH key (`SHA256:…`) and its `op://vault/item`. */
+  op_key_fingerprint: string | null;
+  op_key_item: string | null;
+  /** Title of the default key, so it can be named without listing the vault. */
+  op_key_title?: string | null;
   updated_at: number;
 }
 
@@ -129,13 +136,15 @@ export interface Transaction {
   summary: string;
   server_id: string | null;
   server_name: string | null;
-  entries: { original: string; stored: string; stored_on: Side; is_dir: boolean }[];
+  entries: { original: string; stored: string; stored_on: Side; is_dir: boolean; created?: boolean }[];
   restored: boolean;
 }
 
 export type Direction = "upload" | "download";
 export type ConflictPolicy = "overwrite" | "skip" | "newer";
 export type JobState = "queued" | "scanning" | "running" | "paused" | "done" | "failed" | "cancelled";
+/** A sync job (rsync) can't be paused. */
+export type JobKind = "transfer" | "sync";
 
 export interface Progress {
   id: string;
@@ -152,6 +161,70 @@ export interface Progress {
   speed: number;
   error: string | null;
   backup_id: string | null;
+  kind: JobKind;
+  /** Set on a job that finished with something to mention (e.g. source files vanished). */
+  warning: string | null;
+}
+
+export type SyncDirection = "to_server" | "from_server";
+
+export interface RsyncVersion {
+  implementation: "rsync" | "openrsync";
+  /** "3.2.7"; null for openrsync, which only reports its protocol. */
+  version: string | null;
+  protocol: number;
+}
+
+export interface RsyncSupport {
+  available: boolean;
+  /** Why sync can't be used here; show it as the disabled menu item's tooltip. */
+  reason: string | null;
+  local: RsyncVersion | null;
+  remote: RsyncVersion | null;
+  /** Show before a "Sync from server": the local rsync is older than 3.4.0. */
+  pull_warning: string | null;
+}
+
+export interface SyncRequest {
+  direction: SyncDirection;
+  /** Absolute local folder (source for to_server, destination for from_server). */
+  local: string;
+  /** Absolute server folder. */
+  remote: string;
+  /** Delete files at the destination that aren't in the source (backed up). */
+  delete: boolean;
+  /** Compare contents instead of size and modification time. */
+  checksum: boolean;
+  /** One pattern per entry, e.g. ".DS_Store". */
+  excludes: string[];
+}
+
+export type SyncChange = "new" | "updated" | "deleted" | "skipped";
+
+export interface SyncPreviewItem {
+  change: SyncChange;
+  /** Relative to the sync's folders. */
+  path: string;
+  /** null when unknown: rsync gives no size for a deletion and Kade couldn't look it up. */
+  size: number | null;
+  is_dir: boolean;
+}
+
+export interface SyncPreview {
+  /** Pass to syncStart. */
+  id: string;
+  new_files: number;
+  new_bytes: number;
+  updated_files: number;
+  updated_bytes: number;
+  /** Files and folders. */
+  deleted: number;
+  /** Symlinked files at the destination, left alone. */
+  skipped: number;
+  /** At most 5,000; `truncated` says when there were more. */
+  items: SyncPreviewItem[];
+  truncated: boolean;
+  nothing_to_do: boolean;
 }
 
 export type ImportSource = "cyberduck" | "filezilla" | "transmit" | "ssh_config";
@@ -235,6 +308,7 @@ export type AppError =
   | { kind: "agent_unavailable"; message: string }
   | { kind: "session_not_found" }
   | { kind: "unsupported"; message: string }
+  | { kind: "one_password"; message: string }
   | { kind: "other"; message: string };
 
 export function errorMessage(e: unknown): string {
@@ -253,6 +327,7 @@ export function errorMessage(e: unknown): string {
     case "session_not_found":
       return t("The connection was closed");
     case "unsupported":
+    case "one_password":
     case "other":
       return err.message;
     default:
@@ -311,6 +386,14 @@ export const api = {
   ) => invoke<string[]>("transfer_start", { sessionId, direction, sources, destDir, conflict }),
   transferPause: (id: string, paused: boolean) => invoke<void>("transfer_pause", { id, paused }),
   transferCancel: (id: string) => invoke<void>("transfer_cancel", { id }),
+  /** Detected once per session; cheap to call again. */
+  rsyncSupport: (sessionId: string) => invoke<RsyncSupport>("rsync_support", { sessionId }),
+  /** Dry run. `id` is chosen by the caller (e.g. crypto.randomUUID()) so syncPreviewCancel can stop it. */
+  syncPreview: (sessionId: string, id: string, request: SyncRequest) =>
+    invoke<SyncPreview>("sync_preview", { sessionId, id, request }),
+  syncPreviewCancel: (id: string) => invoke<void>("sync_preview_cancel", { id }),
+  /** Queues the previewed sync; progress arrives as "transfer" events with kind "sync". Cancel with transferCancel. */
+  syncStart: (previewId: string) => invoke<string>("sync_start", { previewId }),
   listWorkspaces: () => invoke<Workspace[]>("list_workspaces"),
   saveWorkspace: (workspace: Workspace) => invoke<Workspace>("save_workspace", { workspace }),
   deleteWorkspace: (id: string, moveTo: string) => invoke<void>("delete_workspace", { id, moveTo }),

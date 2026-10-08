@@ -14,6 +14,7 @@ mod mcp;
 mod onepassword;
 mod profiles;
 mod remote;
+pub mod rsync;
 mod ssh;
 mod status;
 mod store;
@@ -150,9 +151,11 @@ async fn disconnect(
     terminals: State<'_, Terminals>,
     edits: State<'_, edit::Edits>,
     tunnels: State<'_, tunnel::Tunnels>,
+    syncs: State<'_, rsync::Syncs>,
     session_id: String,
 ) -> AppResult<()> {
     terminals.0.lock().unwrap().retain(|_, t| t.session_id != session_id);
+    syncs.forget_session(&session_id);
     edits.stop_session(&session_id);
     tunnels.stop_session(&session_id);
     let session = sessions.0.lock().unwrap().remove(&session_id);
@@ -270,15 +273,20 @@ async fn remote_delete(sessions: State<'_, Sessions>, session_id: String, paths:
     let session = sessions.get(&session_id)?;
     let undo =
         backup::Recorder::new(backup::Side::Remote, backup::Op::Delete, Some(&session), delete_summary(&paths, &session.server_name));
-    for path in &paths {
-        // Clearing out Kade's own backup folder really deletes.
-        if backup::is_remote_backup_path(&session, path) {
-            ssh::delete(&session, path).await?;
-        } else {
-            undo.stash(Some(&session), path).await?;
+    let result = async {
+        for path in &paths {
+            // Clearing out Kade's own backup folder really deletes.
+            if backup::is_remote_backup_path(&session, path) {
+                ssh::delete(&session, path).await?;
+            } else {
+                undo.stash(Some(&session), path).await?;
+            }
         }
+        AppResult::Ok(())
     }
-    undo.commit()
+    .await;
+    // A failure part-way still records what was stashed, so it can be restored.
+    backup::commit_after(undo, result)
 }
 
 fn delete_summary(paths: &[String], place: &str) -> String {
@@ -311,10 +319,14 @@ async fn local_delete(paths: Vec<String>) -> AppResult<Option<backup::Transactio
         None,
         delete_summary(&paths, &tr!("this computer", "deze computer")),
     );
-    for path in &paths {
-        undo.stash(None, path).await?;
+    let result = async {
+        for path in &paths {
+            undo.stash(None, path).await?;
+        }
+        AppResult::Ok(())
     }
-    undo.commit()
+    .await;
+    backup::commit_after(undo, result)
 }
 
 fn editor_setting() -> String {
@@ -516,6 +528,60 @@ fn transfer_cancel(transfers: State<'_, Arc<transfer::Transfers>>, id: String) {
     transfers.cancel(&id);
 }
 
+/// Whether "Sync folder" works on this connection; detected once per session.
+#[tauri::command]
+async fn rsync_support(
+    sessions: State<'_, Sessions>,
+    syncs: State<'_, rsync::Syncs>,
+    session_id: String,
+) -> AppResult<rsync::detect::RsyncSupport> {
+    let session = sessions.get(&session_id)?;
+    Ok(syncs.detected(&session_id, &session).await.support.clone())
+}
+
+/// Dry-run a sync. `id` is chosen by the caller, so `sync_preview_cancel` can
+/// stop it, and is what `sync_start` takes afterwards.
+#[tauri::command]
+async fn sync_preview(
+    sessions: State<'_, Sessions>,
+    syncs: State<'_, rsync::Syncs>,
+    session_id: String,
+    id: String,
+    request: rsync::SyncRequest,
+) -> AppResult<rsync::preview::SyncPreview> {
+    let session = sessions.get(&session_id)?;
+    let detected = syncs.detected(&session_id, &session).await;
+    let cancel = syncs.preview_started(&id);
+    let result = rsync::preview::preview(&session, &session_id, &detected, id.clone(), request, &cancel).await;
+    syncs.preview_finished(&id);
+    let (preview, planned) = result?;
+    syncs.plan(id, planned);
+    Ok(preview)
+}
+
+#[tauri::command]
+fn sync_preview_cancel(syncs: State<'_, rsync::Syncs>, id: String) {
+    syncs.cancel_preview(&id);
+}
+
+/// Queue a previewed sync. Progress arrives as `transfer` events with `kind: "sync"`.
+#[tauri::command]
+async fn sync_start(
+    app: AppHandle,
+    sessions: State<'_, Sessions>,
+    syncs: State<'_, rsync::Syncs>,
+    transfers: State<'_, Arc<transfer::Transfers>>,
+    preview_id: String,
+) -> AppResult<String> {
+    let plan = syncs.take_plan(&preview_id)?;
+    let session = sessions.get(&plan.session_id)?;
+    let detected = syncs.detected(&plan.session_id, &session).await;
+    let emit: transfer::Emit = Arc::new(move |p: &transfer::Progress| {
+        let _ = app.emit("transfer", p);
+    });
+    Ok(rsync::run::start(emit, transfers.inner().clone(), session, detected, plan))
+}
+
 #[tauri::command]
 fn local_home() -> String {
     fs::home()
@@ -563,6 +629,7 @@ pub fn run() {
         .manage(edit::Edits::default())
         .manage(mcp::McpServer::default())
         .manage(tunnel::Tunnels::default())
+        .manage(rsync::Syncs::default())
         .setup(|app| {
             // A missing sync folder (e.g. an unmounted drive) must not stop the app.
             if let Err(e) = app.state::<watch::StoreWatcher>().restart(app.handle()) {
@@ -639,6 +706,10 @@ pub fn run() {
             transfer_start,
             transfer_pause,
             transfer_cancel,
+            rsync_support,
+            sync_preview,
+            sync_preview_cancel,
+            sync_start,
             local_home,
             local_list,
         ])

@@ -43,6 +43,8 @@
     border-bottom: 1px solid var(--mist);
     background: var(--rail);
     overflow-x: auto;
+    /* The active tab overlaps the border by 1px, which would otherwise add a vertical scrollbar. */
+    overflow-y: hidden;
   }
   .tab {
     display: flex;

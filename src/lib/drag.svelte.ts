@@ -35,7 +35,10 @@ class Drag {
       if (!this.source) this.source = source();
       this.x = ev.clientX;
       this.y = ev.clientY;
-      this.over = targetAt(ev.clientX, ev.clientY);
+      // Rows read `over`, so only replace it when the target actually changed.
+      const next = targetAt(ev.clientX, ev.clientY);
+      const cur = this.over;
+      if (next?.side !== cur?.side || next?.sessionId !== cur?.sessionId || next?.dir !== cur?.dir) this.over = next;
     };
     const up = () => {
       window.removeEventListener("pointermove", move);

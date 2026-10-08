@@ -25,8 +25,11 @@
   let confirmDelete = $state<string | null>(null);
 
   async function reload() {
-    txs = await api.backupsList();
-    loading = false;
+    try {
+      txs = await api.backupsList();
+    } finally {
+      loading = false;
+    }
   }
   onMount(() => void reload().catch((e) => (error = errorMessage(e))));
 
@@ -84,7 +87,7 @@
       <ArchiveRestore size={18} color="var(--pine)" />
       <div>
         <h1 id="bk-title">Backups</h1>
-        <p>{t("Everything Kade deletes or overwrites is kept for {n} days.", { n: retentionDays })}</p>
+        <p>{tn(retentionDays, "Everything Kade deletes or overwrites is kept for {n} day.", "Everything Kade deletes or overwrites is kept for {n} days.")}</p>
       </div>
       {@render close()}
     </div>
@@ -114,6 +117,15 @@
             {tn(tx.entries.length, "{n} item", "{n} items")} ·
             {tx.restored ? t("restored") : expires(tx)}
           </small>
+          {#if !tx.restored && tx.entries.some((e) => e.created)}
+            {@const added = tx.entries.filter((e) => e.created).length}
+            {@const back = tx.entries.length - added}
+            <small class="hint">
+              {back > 0
+                ? t("Restore puts {back} replaced or deleted back and moves {added} added aside. Both can be undone.", { back, added })
+                : t("Restore moves the {added} added aside. That can be undone.", { added })}
+            </small>
+          {/if}
           <small class="mono paths" title={tx.entries.map((e) => e.original).join("\n")}>
             {tx.entries.slice(0, 3).map((e) => e.original).join(", ")}{tx.entries.length > 3 ? ", …" : ""}
           </small>

@@ -16,7 +16,13 @@ pub fn save(ws: &mut Workspace) -> AppResult<()> {
     if ws.id.is_empty() {
         ws.id = uuid::Uuid::new_v4().to_string();
     }
-    ws.op_account = ws.op_account.take().filter(|a| !a.trim().is_empty());
+    let clean = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+    ws.op_account = clean(ws.op_account.take());
+    ws.op_vault = clean(ws.op_vault.take());
+    // A default key only makes sense inside its vault.
+    ws.op_key_fingerprint = clean(ws.op_key_fingerprint.take()).filter(|_| ws.op_vault.is_some());
+    ws.op_key_item = clean(ws.op_key_item.take()).filter(|_| ws.op_vault.is_some());
+    ws.op_key_title = clean(ws.op_key_title.take()).filter(|_| ws.op_key_fingerprint.is_some());
     ws.updated_at = store::now_ms();
     let saved = ws.clone();
     store::update(|data| {
@@ -78,6 +84,7 @@ mod tests {
     #[test]
     fn create_move_and_delete() {
         let tmp = std::env::temp_dir().join(format!("kade-ws-{}", uuid::Uuid::new_v4()));
+        let _env = crate::backup::TEST_ENV.blocking_lock();
         std::env::set_var("KADE_CONFIG_HOME", &tmp);
 
         // Fresh store: only the implicit default.
@@ -86,13 +93,34 @@ mod tests {
         assert_eq!((ws.len(), ws[0].name.as_str()), (1, home.as_str()));
         assert!(delete(DEFAULT_WORKSPACE, "x").is_err(), "the last workspace must stay");
 
-        let mut werk =
-            Workspace { id: String::new(), name: "Werk".into(), color: "blue".into(), op_account: Some("ACC2".into()), updated_at: 0 };
+        let mut werk = Workspace {
+            id: String::new(),
+            name: "Werk".into(),
+            color: "blue".into(),
+            op_account: Some("ACC2".into()),
+            op_vault: Some(" ".into()),
+            op_key_fingerprint: Some("SHA256:abc".into()),
+            op_key_item: Some("op://V/I".into()),
+            op_key_title: Some("Deploy".into()),
+            updated_at: 0,
+        };
         save(&mut werk).unwrap();
         let ws = store::load().unwrap().workspaces_or_default();
         assert_eq!(ws.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), [home.as_str(), "Werk"]);
+        // A blank vault is none, and a default key does not outlive its vault.
+        assert_eq!((ws[1].op_vault.as_deref(), ws[1].op_key_fingerprint.as_deref(), ws[1].op_key_item.as_deref()), (None, None, None));
+        assert_eq!(ws[1].op_key_title, None);
+        werk.op_vault = Some("V".into());
+        werk.op_key_fingerprint = Some("SHA256:abc".into());
+        werk.op_key_item = Some("op://V/I".into());
+        werk.op_key_title = Some("Deploy".into());
+        save(&mut werk).unwrap();
+        let ws = store::load().unwrap().workspaces_or_default();
+        assert_eq!(ws[1].op_key_fingerprint.as_deref(), Some("SHA256:abc"));
+        assert_eq!(ws[1].op_key_title.as_deref(), Some("Deploy"));
 
-        let mut dup = Workspace { id: String::new(), name: "werk".into(), color: "pine".into(), op_account: None, updated_at: 0 };
+        let mut dup = Workspace { name: "werk".into(), ..Workspace::fallback() };
+        dup.id = String::new();
         assert!(save(&mut dup).is_err(), "names are unique");
 
         let conn = profiles::upsert(ServerProfile {

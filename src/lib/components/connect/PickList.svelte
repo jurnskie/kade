@@ -12,12 +12,14 @@
 
 <script lang="ts">
   import { LoaderCircle } from "@lucide/svelte";
+  import { t } from "$lib/i18n.svelte";
 
   let {
     rows,
     loading,
     error,
     empty,
+    onretry,
     inset = false,
   }: {
     rows: PickRow[];
@@ -25,6 +27,8 @@
     loading: string | null;
     error: string | null;
     empty: string;
+    /** Shows a Retry button next to the error. */
+    onretry?: () => void;
     /** Indent under an option's heading, when not inside its sub-section. */
     inset?: boolean;
   } = $props();
@@ -34,7 +38,10 @@
   {#if loading}
     <div class="keymsg"><LoaderCircle size={14} class="spin" />{loading}</div>
   {:else if error}
-    <div class="keymsg err">{error}</div>
+    <div class="keymsg err">
+      <span>{error}</span>
+      {#if onretry}<button class="retry" onclick={onretry}>{t("Retry")}</button>{/if}
+    </div>
   {:else if rows.length === 0}
     <div class="keymsg">{empty}</div>
   {:else}
@@ -56,6 +63,8 @@
     border-radius: 10px;
     background: var(--snow);
     max-height: 180px;
+    /* Reserved, so the dialog doesn't jump when the list arrives. */
+    min-height: 120px;
     overflow-y: auto;
   }
   .keys.inset {
@@ -107,5 +116,16 @@
   }
   .keymsg.err {
     color: var(--danger);
+    align-items: flex-start;
+  }
+  .retry {
+    margin-left: auto;
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid var(--mist);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--granite);
+    font-size: 12px;
   }
 </style>

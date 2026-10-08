@@ -5,14 +5,32 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppError {
-    HostKeyUnknown { fingerprint: String, algorithm: String },
-    HostKeyChanged { line: usize },
-    AuthFailed { message: String },
+    HostKeyUnknown {
+        fingerprint: String,
+        algorithm: String,
+    },
+    HostKeyChanged {
+        line: usize,
+    },
+    AuthFailed {
+        message: String,
+    },
     PasswordRequired,
-    AgentUnavailable { message: String },
+    AgentUnavailable {
+        message: String,
+    },
+    /// A failed `op` call (prompt dismissed, not signed in, timeout…); `message` is already
+    /// translated and cleaned up, so show it as is. Retrying is meaningful.
+    OnePassword {
+        message: String,
+    },
     SessionNotFound,
-    Unsupported { message: String },
-    Other { message: String },
+    Unsupported {
+        message: String,
+    },
+    Other {
+        message: String,
+    },
 }
 
 /// Shown in the transfer queue, edit bar and logs, so in the user's language.
@@ -32,6 +50,7 @@ impl std::fmt::Display for AppError {
             AppError::AgentUnavailable { message } => {
                 tr!("Agent not reachable: {m}", "Agent niet bereikbaar: {m}", m = message)
             }
+            AppError::OnePassword { message } => message.clone(),
             AppError::SessionNotFound => tr!("Connection not found", "Verbinding niet gevonden"),
             AppError::Unsupported { message } => tr!("Not supported: {m}", "Niet ondersteund: {m}", m = message),
             AppError::Other { message } => message.clone(),

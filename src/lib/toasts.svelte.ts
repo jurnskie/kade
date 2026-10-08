@@ -3,6 +3,8 @@ import { errorMessage, type Transaction } from "./api";
 /** The messages at the bottom of the window: errors, short notices, an undo offer and a waiting update. */
 class Toasts {
   error = $state<string | null>(null);
+  /** Follow-up offered on the error toast, e.g. retrying a failed connect. Such a toast stays until dismissed. */
+  errorAction = $state<{ label: string; run: () => void } | null>(null);
   /** A short success message, e.g. after an import. */
   notice = $state<string | null>(null);
   undo = $state<{ tx: Transaction; sessionId: string | null } | null>(null);
@@ -14,11 +16,18 @@ class Toasts {
   private undoTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** An arrow function, so it can be handed out as an `onerror` callback. */
-  showError = (e: unknown) => {
+  showError = (e: unknown, action?: { label: string; run: () => void }) => {
     clearTimeout(this.errorTimer);
     this.error = errorMessage(e);
-    this.errorTimer = setTimeout(() => (this.error = null), 6000);
+    this.errorAction = action ?? null;
+    if (!action) this.errorTimer = setTimeout(() => (this.error = null), 6000);
   };
+
+  dismissError() {
+    clearTimeout(this.errorTimer);
+    this.error = null;
+    this.errorAction = null;
+  }
 
   showNotice(text: string) {
     this.notice = text;

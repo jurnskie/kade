@@ -32,3 +32,5 @@ class TransferQueue {
 
 export const transfers = new TransferQueue();
 export const isFinished = (p: Progress) => FINISHED.has(p.state);
+/** Sync jobs run inside rsync, which can't be paused. */
+export const canPause = (p: Progress) => p.kind !== "sync";

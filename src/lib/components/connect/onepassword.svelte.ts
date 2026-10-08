@@ -3,6 +3,15 @@ import { api, errorMessage, type OpAccount, type OpItem, type OpSshKey, type OpV
 /** What the dialog lists from 1Password: SSH keys, logins (for their password), or nothing. */
 export type OpListing = "keys" | "logins" | null;
 
+/** A workspace's default SSH key, and the account it was picked from ("" for the default account). */
+export interface WorkspaceKey {
+  fingerprint: string;
+  item: string | null;
+  /** Saved with the key, for workspaces that have it. */
+  title?: string | null;
+  account: string;
+}
+
 /**
  * Which 1Password account and vault to use, and the SSH keys or logins in it.
  * A machine can be signed in to several accounts (work and personal); without
@@ -22,11 +31,64 @@ export class OnePassword {
   query = $state("");
   /** Set once the user chose an account; from then on the workspace's no longer applies. */
   picked = false;
+  /** Likewise for the vault. */
+  vaultPicked = false;
+  /** Set once the user asked to pick another key than the workspace's default. */
+  browsing = $state(false);
+  /** Bumped by `retry`; the loading effects depend on it. */
+  #attempt = $state(0);
+  #wsKey: () => WorkspaceKey | null;
+  #ownKey: () => boolean;
 
-  constructor(account: string, listing: () => OpListing, wsAccount: () => string) {
+  /** The workspace's default SSH key, used by connections that choose none. */
+  get defaultKey(): WorkspaceKey | null {
+    const key = this.#wsKey();
+    // Without an account the key was picked from 1Password's default account.
+    return key && (!key.account || key.account === this.account) ? key : null;
+  }
+
+  /** The workspace's default key, whichever account it was picked from. */
+  get workspaceKey(): WorkspaceKey | null {
+    return this.#wsKey();
+  }
+
+  /**
+   * Whether the default key stands in for a listing: the connection has no key of its own and
+   * the user didn't ask to browse. Listing keys costs an `op` call per key, so it waits.
+   */
+  get usesDefaultKey(): boolean {
+    const key = this.#wsKey();
+    if (!key || this.browsing || this.#ownKey()) return false;
+    return !this.account || !key.account || key.account === this.account;
+  }
+
+  /** Start listing keys after all. */
+  browse() {
+    this.browsing = true;
+  }
+
+  /** Run the failed listing again. */
+  retry() {
+    this.error = null;
+    if (this.accounts?.length === 0) this.accounts = null;
+    this.#attempt++;
+  }
+
+  constructor(
+    account: string,
+    listing: () => OpListing,
+    wsAccount: () => string,
+    wsVault: () => string,
+    wsKey: () => WorkspaceKey | null,
+    ownKey: () => boolean = () => false,
+  ) {
     this.account = account;
+    this.#wsKey = wsKey;
+    this.#ownKey = ownKey;
     // Its own derived, so switching between the two 1Password options doesn't reload accounts or vaults.
     const active = $derived(listing() !== null);
+    // Also derived, so leaving the keys option for logins doesn't re-run the loaders.
+    const deferred = $derived(listing() === "keys" && this.usesDefaultKey);
 
     // Follow the workspace's 1Password account until the user picks one explicitly.
     $effect(() => {
@@ -34,9 +96,16 @@ export class OnePassword {
       if (!this.picked && acc && this.accounts?.some((a) => a.id === acc)) this.account = acc;
     });
 
+    // Likewise for the vault, so a workspace with a default vault doesn't list every vault's keys.
+    $effect(() => {
+      const vault = wsVault();
+      if (!this.vaultPicked) this.vault = vault;
+    });
+
     // Accounts once, when a 1Password option is first picked.
     $effect(() => {
-      if (!active || this.accounts) return;
+      void this.#attempt;
+      if (!active || this.accounts || deferred) return;
       api
         .opAccounts()
         .then((list) => {
@@ -55,7 +124,8 @@ export class OnePassword {
     // Vaults of the chosen account.
     $effect(() => {
       const account = this.account;
-      if (!active || !account) return;
+      void this.#attempt;
+      if (!active || !account || deferred) return;
       this.vaults = [];
       let cancelled = false;
       api
@@ -74,7 +144,8 @@ export class OnePassword {
     // Logins (for passwords) or SSH keys in the chosen account/vault.
     $effect(() => {
       const [account, vault, what] = [this.account, this.vault, listing()];
-      if (!account || !what) return;
+      void this.#attempt;
+      if (!account || !what || (what === "keys" && deferred)) return;
       this.loading = true;
       this.error = null;
       let cancelled = false;

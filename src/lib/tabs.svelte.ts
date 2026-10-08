@@ -1,6 +1,8 @@
-import { api, type AppError, type ConflictPolicy, type Direction, type ServerProfile } from "./api";
+import { SvelteSet } from "svelte/reactivity";
+import { api, errorMessage, type AppError, type ConflictPolicy, type Direction, type ServerProfile } from "./api";
 import { edits } from "./edits.svelte";
 import { store } from "./store.svelte";
+import { t } from "./i18n.svelte";
 import { showError } from "./toasts.svelte";
 
 export interface Tab {
@@ -12,6 +14,8 @@ export interface Tab {
   hasFiles: boolean;
   hasTerminal: boolean;
   view: "files" | "terminal" | "tunnels" | "status";
+  /** The profile was deleted elsewhere (sync) while this tab stayed open. */
+  serverGone: boolean;
   /** Mount the terminal lazily, then keep it alive across view/tab switches. */
   terminalStarted: boolean;
   localRefresh: number;
@@ -34,10 +38,12 @@ export interface ConflictAsk {
 class Tabs {
   list = $state<Tab[]>([]);
   activeId = $state<string | null>(null);
-  /** Server id of the connection being set up. */
-  connecting = $state<string | null>(null);
+  /** Server ids of the connections being set up. */
+  connecting = new SvelteSet<string>();
   /** This computer's home folder; local panes start there unless the profile links another folder. */
   localHome = $state("");
+  /** Set when a connection finishing (not the user) changed the active tab. */
+  private connectActivated = false;
   prompt = $state<ConnectPrompt | null>(null);
   conflict = $state<ConflictAsk | null>(null);
 
@@ -46,6 +52,13 @@ class Tabs {
 
   find(sessionId: string | null | undefined) {
     return this.list.find((t) => t.sessionId === sessionId);
+  }
+
+  /** True once per activation caused by a finished connection. */
+  takeConnectActivation() {
+    const was = this.connectActivated;
+    this.connectActivated = false;
+    return was;
   }
 
   sessionFor = (serverId: string | null): string | null => {
@@ -72,7 +85,7 @@ class Tabs {
   }
 
   async connect(server: ServerProfile, password?: string, acceptFingerprint?: string) {
-    this.connecting = server.id;
+    this.connecting.add(server.id);
     try {
       const c = await api.connect(server.id, password, acceptFingerprint);
       this.list.push({
@@ -85,9 +98,11 @@ class Tabs {
         hasTerminal: c.has_terminal,
         view: c.has_terminal && (server.protocol === "ssh" || !c.has_files) ? "terminal" : "files",
         terminalStarted: c.has_terminal && (server.protocol === "ssh" || !c.has_files),
+        serverGone: false,
         localRefresh: 0,
         remoteRefresh: 0,
       });
+      this.connectActivated = true;
       this.activeId = c.session_id;
       // Tunnels marked "start automatically" come up with the connection.
       if (c.has_terminal) {
@@ -102,10 +117,14 @@ class Tabs {
       } else if (err?.kind === "password_required") {
         this.prompt = { kind: "password", server, acceptFingerprint };
       } else {
-        showError(e);
+        showError(t("Couldn't connect to {name}: {error}", { name: server.name, error: errorMessage(e) }), {
+          label: t("Retry"),
+          // Without the typed password, so it isn't kept in memory; Kade asks for it again.
+          run: () => this.connect(server, undefined, acceptFingerprint),
+        });
       }
     } finally {
-      this.connecting = null;
+      this.connecting.delete(server.id);
     }
   }
 
@@ -114,7 +133,7 @@ class Tabs {
     store.remember(server.id);
     const existing = this.list.find((t) => t.server.id === server.id);
     if (existing) this.activeId = existing.sessionId;
-    else if (this.connecting !== server.id) this.connect(server);
+    else if (!this.connecting.has(server.id)) this.connect(server);
   };
 
   async close(tab: Tab) {
@@ -125,11 +144,20 @@ class Tabs {
     await api.disconnect(tab.sessionId).catch(showError);
   }
 
+  /** Point open tabs at the fresh profiles; a tab whose profile is gone keeps its last one. */
+  syncServers(servers: ServerProfile[]) {
+    for (const t of this.list) {
+      const fresh = servers.find((s) => s.id === t.server.id);
+      if (fresh) t.server = fresh;
+      t.serverGone = !fresh;
+    }
+  }
+
   /** Save a profile and keep open tabs pointing at the result; errors go to the caller. */
   saveServer = async (profile: ServerProfile): Promise<ServerProfile> => {
     const saved = await api.saveServer(profile);
     store.servers = await api.listServers();
-    for (const t of this.list) if (t.server.id === saved.id) t.server = saved;
+    this.syncServers(store.servers);
     return saved;
   };
 
@@ -153,3 +181,5 @@ class Tabs {
 }
 
 export const tabs = new Tabs();
+// Sync changes (store-changed) reach open tabs too; set here since tabs imports the store.
+store.onServersLoaded = (servers) => tabs.syncServers(servers);

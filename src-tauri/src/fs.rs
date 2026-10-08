@@ -40,11 +40,12 @@ pub fn home() -> String {
 pub fn list(path: &str) -> AppResult<Vec<Entry>> {
     let mut out = Vec::new();
     for item in std::fs::read_dir(path)? {
-        let item = item?;
-        let link_meta = item.metadata()?;
+        // An entry can vanish between readdir and stat; skip it rather than fail the listing.
+        let Ok(item) = item else { continue };
+        let Ok(link_meta) = item.metadata() else { continue };
         let is_symlink = link_meta.file_type().is_symlink();
         // Follow symlinks for size/dir-ness; fall back to the link itself if it dangles.
-        let meta = std::fs::metadata(item.path()).unwrap_or(link_meta);
+        let meta = if is_symlink { std::fs::metadata(item.path()).unwrap_or(link_meta) } else { link_meta };
         out.push(Entry {
             name: item.file_name().to_string_lossy().into_owned(),
             path: item.path().to_string_lossy().into_owned(),
@@ -111,5 +112,27 @@ mod tests {
         assert_eq!(format_mode(0o040755), "drwxr-xr-x");
         assert_eq!(format_mode(0o100600), "-rw-------");
         assert_eq!(format_mode(0o120777), "lrwxrwxrwx");
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    #[test]
+    fn lists_files_and_follows_only_symlinks() {
+        let dir = std::env::temp_dir().join(format!("kade-fs-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "hi").unwrap();
+        std::os::unix::fs::symlink(dir.join("sub"), dir.join("link")).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), dir.join("dangling")).unwrap();
+        let mut entries = list(dir.to_str().unwrap()).unwrap();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["a.txt", "dangling", "link", "sub"]);
+        assert!(entries[2].is_symlink && entries[2].is_dir);
+        assert!(entries[1].is_symlink && !entries[1].is_dir);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

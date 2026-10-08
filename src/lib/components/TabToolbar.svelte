@@ -117,8 +117,8 @@
     gap: 6px;
     padding: 3px 9px;
     border-radius: 99px;
-    background: var(--pine-t);
-    color: var(--pine);
+    background: var(--online-t);
+    color: var(--online);
     font-weight: 600;
     font-size: 11.5px;
     flex: none;
@@ -131,7 +131,7 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--pine);
+    background: var(--online);
   }
   .right {
     margin-left: auto;

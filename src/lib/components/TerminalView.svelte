@@ -6,6 +6,8 @@
   import { RotateCcw } from "@lucide/svelte";
   import { api, errorMessage } from "$lib/api";
   import { t } from "$lib/i18n.svelte";
+  import { theme } from "$lib/theme.svelte";
+  import { termTheme } from "$lib/termTheme";
 
   let { sessionId, visible, title }: { sessionId: string; visible: boolean; title: string } = $props();
 
@@ -13,16 +15,19 @@
   let term: Terminal;
   let fit: FitAddon;
   let termId: string | null = null;
+  let destroyed = false;
   let exited = $state(false);
   let error = $state<string | null>(null);
 
   async function start() {
+    if (destroyed) return;
     exited = false;
     error = null;
     term.reset();
     fit.fit();
     try {
-      termId = await api.terminalOpen(sessionId, term.cols, term.rows, (e) => {
+      const id = await api.terminalOpen(sessionId, term.cols, term.rows, (e) => {
+        if (destroyed) return;
         if (e.type === "data") term.write(new Uint8Array(e.bytes));
         else {
           exited = true;
@@ -30,10 +35,15 @@
           term.write(`\r\n\x1b[2m[${t("session ended")}]\x1b[0m\r\n`);
         }
       });
-      if (exited) termId = null;
+      // Unmounted while the shell was starting: nobody is left to close it.
+      if (destroyed) {
+        api.terminalClose(id).catch(() => {});
+        return;
+      }
+      termId = exited ? null : id;
       if (visible) term.focus();
     } catch (e) {
-      error = errorMessage(e);
+      if (!destroyed) error = errorMessage(e);
     }
   }
 
@@ -45,33 +55,22 @@
       cursorBlink: true,
       allowProposedApi: false,
       scrollback: 10000,
-      theme: {
-        background: "#0f1513",
-        foreground: "#d9dfdb",
-        cursor: "#5fc79e",
-        cursorAccent: "#0f1513",
-        selectionBackground: "#2a3d35",
-        black: "#18221e",
-        red: "#e06c5a",
-        green: "#5fc79e",
-        yellow: "#e0a84a",
-        blue: "#8fb8e8",
-        magenta: "#c79bd8",
-        cyan: "#6fc3c0",
-        white: "#d9dfdb",
-        brightBlack: "#6b7872",
-        brightRed: "#f08a78",
-        brightGreen: "#7fdcb5",
-        brightYellow: "#f0c070",
-        brightBlue: "#aacdf2",
-        brightMagenta: "#dab3e8",
-        brightCyan: "#8fd8d5",
-        brightWhite: "#f4f6f4",
-      },
+      theme: termTheme(),
     });
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+
+    // The app's own shortcuts (switch workspace, quick switcher, files/terminal)
+    // must reach the window; xterm would otherwise swallow them or send them to the shell.
+    term.attachCustomKeyEventHandler((e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const appKey =
+        (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) ||
+        (mod && e.key.toLowerCase() === "k") ||
+        (e.ctrlKey && e.key === "`");
+      return !appKey;
+    });
 
     term.onData((data) => {
       if (termId) api.terminalWrite(termId, data).catch(() => {});
@@ -89,10 +88,18 @@
     document.fonts.ready.then(start);
 
     return () => {
+      destroyed = true;
       ro.disconnect();
       if (termId) api.terminalClose(termId).catch(() => {});
       term.dispose();
     };
+  });
+
+  // Recolour open terminals when the palette changes. applyTheme has already
+  // updated the DOM by the time this runs, so the tokens read fresh.
+  $effect(() => {
+    theme.palette;
+    if (term) term.options.theme = termTheme();
   });
 
   $effect(() => {
@@ -120,12 +127,13 @@
   .term {
     flex: 1;
     min-height: 0;
-    background: #0f1513;
+    background: var(--term-bg);
     border-radius: 12px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: 0 0 0 1px #1a2420;
+    box-shadow: 0 0 0 1px var(--term-raise);
+    -webkit-user-select: text;
     user-select: text;
   }
   .th {
@@ -133,7 +141,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 10px;
-    border-bottom: 1px solid #1c2723;
+    border-bottom: 1px solid var(--term-line);
   }
   .st {
     display: flex;
@@ -141,18 +149,18 @@
     gap: 7px;
     padding: 5px 10px;
     border-radius: 6px;
-    background: #18221e;
-    color: #e8ece8;
+    background: var(--term-chip);
+    color: var(--term-15);
     font: 500 12px var(--mono);
   }
   .st i {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #5fc79e;
+    background: var(--term-2);
   }
   .st i.off {
-    background: #6b7872;
+    background: var(--term-8);
   }
   .re {
     margin-left: auto;
@@ -161,17 +169,17 @@
     gap: 6px;
     padding: 5px 10px;
     border-radius: 6px;
-    background: #1a2420;
-    border: 1px solid #233029;
-    color: #c9d1cc;
+    background: var(--term-raise);
+    border: 1px solid var(--term-line2);
+    color: var(--term-fg);
     font: 500 12px var(--sans);
   }
   .re:hover {
-    background: #233029;
+    background: var(--term-line2);
   }
   .err {
     padding: 10px 16px;
-    color: #f08a78;
+    color: var(--term-9);
     font: 12px var(--mono);
   }
   .host {

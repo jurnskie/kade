@@ -3,6 +3,7 @@
   import type { Protocol, Workspace } from "$lib/api";
   import { colorOf } from "$lib/workspaces";
   import { t } from "$lib/i18n.svelte";
+  import { radioGroup } from "./radioGroup";
 
   let {
     protocol,
@@ -55,9 +56,16 @@
   }
 </script>
 
-<div class="proto">
+<div class="proto" role="radiogroup" aria-label={t("Protocol")} use:radioGroup>
   {#each protocols as p (p.id)}
-    <button class:on={protocol === p.id} disabled={!p.ready} onclick={() => onprotocol(p.id)}>
+    <button
+      class:on={protocol === p.id}
+      role="radio"
+      aria-checked={protocol === p.id}
+      tabindex={protocol === p.id ? 0 : -1}
+      disabled={!p.ready}
+      onclick={() => onprotocol(p.id)}
+    >
       <p.icon size={16} color={protocol === p.id ? "var(--pine)" : "var(--ink2)"} />
       <b>{p.label}</b><small>{t(p.hint)}</small>
     </button>
@@ -101,10 +109,13 @@
 {#if workspaces.length > 1}
   <div class="f">
     <span>Workspace</span>
-    <div class="wspick">
+    <div class="wspick" role="radiogroup" aria-label={t("Workspace")} use:radioGroup>
       {#each workspaces as w (w.id)}
         <button
           class:on={workspace === w.id}
+          role="radio"
+          aria-checked={workspace === w.id}
+          tabindex={workspace === w.id ? 0 : -1}
           style:--ws={colorOf(w).color}
           style:--ws-tint={colorOf(w).tint}
           onclick={() => (workspace = w.id)}

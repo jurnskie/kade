@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -82,6 +83,13 @@ fn hash(bytes: &[u8]) -> u64 {
     h.finish()
 }
 
+/// Does the working copy hold something the server doesn't have? A conflict or
+/// error means the last save never arrived, whatever the hashes say.
+fn has_unsaved_changes(state: EditState, local_hash: Option<u64>, uploaded_hash: u64) -> bool {
+    let Some(local_hash) = local_hash else { return false };
+    matches!(state, EditState::Conflict | EditState::Error) || local_hash != uploaded_hash
+}
+
 fn edit_root() -> AppResult<PathBuf> {
     let dir = dirs::cache_dir().ok_or_else(|| AppError::other(tr!("No cache directory", "Geen cache-map")))?.join("kade/edit");
     std::fs::create_dir_all(&dir)?;
@@ -135,6 +143,28 @@ impl Edit {
         Ok(())
     }
 
+    /// Move unsaved changes of the working copy into a backup, before it is
+    /// deleted or overwritten. Returns the backup id when something was kept.
+    fn keep_unsaved(&self, op: Op) -> AppResult<Option<String>> {
+        let (remote, local) = self.paths();
+        let state = self.info.lock().unwrap().state;
+        let local_hash = std::fs::read(&local).ok().map(|c| hash(&c));
+        if !has_unsaved_changes(state, local_hash, *self.uploaded_hash.lock().unwrap()) {
+            return Ok(None);
+        }
+        let undo = Recorder::new(
+            Side::Local,
+            op,
+            None,
+            tr!("Unsaved edit of {remote}", "Niet-opgeslagen bewerking van {remote}", remote = remote),
+        );
+        // A local stash never waits on anything, so it finishes on the first poll.
+        undo.stash(None, &local.to_string_lossy()).now_or_never().ok_or_else(|| {
+            AppError::other(tr!("Couldn't back up your unsaved changes", "Kon je niet-opgeslagen wijzigingen niet back-uppen"))
+        })??;
+        Ok(undo.commit()?.map(|tx| tx.id))
+    }
+
     /// Upload the working copy. With `force`, ignore a changed server copy.
     async fn upload(&self, force: bool) -> AppResult<()> {
         let _busy = self.busy.lock().await;
@@ -160,25 +190,44 @@ impl Edit {
         self.set(EditState::Uploading, None);
 
         let fs = self.session.fs()?;
+        // Write through a symlink instead of replacing it, and give the new file
+        // the mode and owner of the one it replaces.
+        let (target, kept) = fs.overwrite_target(&remote).await?;
         // Keep the previous server version, as with every overwrite.
         let undo =
             Recorder::new(Side::Remote, Op::Overwrite, Some(&self.session), tr!("Edited: {remote}", "Bewerkt: {remote}", remote = remote));
-        if fs.exists(&remote).await? {
-            undo.stash(Some(&self.session), &remote).await?;
+        let replaces = fs.exists(&target).await?;
+        if replaces {
+            undo.stash(Some(&self.session), &target).await?;
         }
         let result = async {
-            let mut writer = fs.writer(&remote).await?;
+            let mut writer = fs.writer(&target).await?;
             writer.write_all(&content).await?;
             writer.finish().await
         }
         .await;
-        let tx = undo.commit()?;
         if let Err(e) = result {
             // Never leave a live site without the file: put the old version back.
-            if let Some(tx) = tx {
-                let _ = crate::backup::restore(&tx.id, Some(&self.session)).await;
+            let mut restore_failed = None;
+            if replaces {
+                let _ = fs.remove_file(&target).await; // the half-written file
+                restore_failed = undo.put_back(Some(&self.session), &target).await.err();
             }
-            return Err(e);
+            let tx = undo.commit()?;
+            return Err(match (restore_failed, tx) {
+                (Some(err), Some(tx)) => AppError::other(tr!(
+                    "{e}. Putting the previous version back failed ({err}); it is kept in backup {id}",
+                    "{e}. De vorige versie terugzetten is mislukt ({err}); die staat in backup {id}",
+                    e = e,
+                    err = err,
+                    id = tx.id
+                )),
+                _ => e,
+            });
+        }
+        undo.commit()?;
+        if let Some(kept) = &kept {
+            fs.restore_kept(&target, kept).await;
         }
 
         *self.uploaded_hash.lock().unwrap() = h;
@@ -334,14 +383,30 @@ impl Edits {
     pub async fn reload(&self, id: &str) -> AppResult<()> {
         let edit = self.get(id)?;
         let _busy = edit.busy.lock().await;
+        // Fetching overwrites the working copy; keep what the user typed.
+        let kept = edit.keep_unsaved(Op::Overwrite)?;
         edit.fetch().await?;
-        edit.set(EditState::Watching, Some(tr!("Fetched the server version", "Serverversie opgehaald")));
+        let message = match kept {
+            Some(id) => tr!(
+                "Fetched the server version; your changes are kept in backup {id}",
+                "Serverversie opgehaald; je wijzigingen staan in backup {id}",
+                id = id
+            ),
+            None => tr!("Fetched the server version", "Serverversie opgehaald"),
+        };
+        edit.set(EditState::Watching, Some(message));
         Ok(())
     }
 
     /// Stop watching and remove the working copy.
     pub fn stop(&self, id: &str) {
-        if let Some(edit) = self.0.lock().unwrap().remove(id) {
+        let removed = self.0.lock().unwrap().remove(id);
+        if let Some(edit) = removed {
+            // Unsaved changes go to a backup first; if that fails, the folder stays.
+            if let Err(e) = edit.keep_unsaved(Op::Delete) {
+                eprintln!("kade: keeping the unsaved edit of {} failed, leaving it in place: {e}", edit.paths().0);
+                return;
+            }
             let (_, local) = edit.paths();
             if let Some(dir) = local.parent() {
                 let _ = std::fs::remove_dir_all(dir);
@@ -361,5 +426,20 @@ impl Edits {
         for id in ids {
             self.stop(&id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_unsaved_changes, EditState};
+
+    #[test]
+    fn unsaved_changes_are_detected() {
+        use EditState::*;
+        assert!(!has_unsaved_changes(Watching, Some(1), 1), "saved and identical");
+        assert!(has_unsaved_changes(Watching, Some(2), 1), "saved locally, not uploaded");
+        assert!(has_unsaved_changes(Conflict, Some(1), 1), "conflict keeps the file");
+        assert!(has_unsaved_changes(Error, Some(1), 1), "failed upload keeps the file");
+        assert!(!has_unsaved_changes(Error, None, 1), "nothing left to keep");
     }
 }

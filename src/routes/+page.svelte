@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Anchor, Plus } from "@lucide/svelte";
+  import { Anchor, Plus, TriangleAlert } from "@lucide/svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { listen } from "@tauri-apps/api/event";
   import { api, type ServerProfile, type Workspace } from "$lib/api";
@@ -16,6 +16,7 @@
   import WorkspaceDialog from "$lib/components/WorkspaceDialog.svelte";
   import ConflictPrompt from "$lib/components/ConflictPrompt.svelte";
   import ConnectPrompt from "$lib/components/ConnectPrompt.svelte";
+  import Prompt from "$lib/components/Prompt.svelte";
   import Toasts from "$lib/components/Toasts.svelte";
   import DragGhost from "$lib/components/DragGhost.svelte";
   import { workspaceIdOf } from "$lib/workspaces";
@@ -23,6 +24,7 @@
   import { edits } from "$lib/edits.svelte";
   import { transfers } from "$lib/transfers.svelte";
   import { drag, targetAt } from "$lib/drag.svelte";
+  import { modalOpen } from "$lib/modals";
   import { store } from "$lib/store.svelte";
   import { tabs } from "$lib/tabs.svelte";
   import { showError, toasts } from "$lib/toasts.svelte";
@@ -34,12 +36,15 @@
   let importOpen = $state(false);
   let backupsOpen = $state(false);
   let switcherOpen = $state(false);
+  /** The connection waiting for the user to confirm its deletion. */
+  let deleting = $state<ServerProfile | null>(null);
 
   const newConnection = () => (dialog = { initial: null, key: Date.now() });
 
-  // Opening or switching to a connection brings its tab back into view.
+  // Opening or switching to a connection brings its tab back into view,
+  // unless it is only a background connection that has just finished.
   $effect(() => {
-    if (tabs.activeId) settings = null;
+    if (tabs.activeId && !tabs.takeConnectActivation()) settings = null;
   });
 
   // Fold the sidebar into an icon rail on narrow windows (half-screen tiling);
@@ -61,34 +66,44 @@
     document.documentElement.lang = i18n.lang;
   });
 
-  onMount(async () => {
-    tabs.localHome = await api.localHome().catch((e) => (showError(e), tabs.localHome));
-    syncBackendLanguage();
-    await store.reload().catch(showError);
-    // Another machine changed kade.json through the sync folder.
-    listen("store-changed", () => store.reload().catch(showError));
+  onMount(() => {
+    // Another machine changed kade.json through the sync folder; an AI assistant
+    // asked (via MCP) to open a connection; files dropped from the OS file
+    // manager onto a server pane get uploaded.
+    const unlisten = [
+      listen("store-changed", () => store.reload().catch(showError)),
+      listen<string>("mcp-open", async ({ payload: id }) => {
+        await store.reload().catch(showError);
+        const server = store.servers.find((s) => s.id === id);
+        if (server) tabs.open(server);
+      }),
+      getCurrentWebview().onDragDropEvent((e) => {
+        if (e.payload.type !== "drop") return;
+        const dpr = window.devicePixelRatio || 1;
+        const target = targetAt(e.payload.position.x / dpr, e.payload.position.y / dpr);
+        const tab = tabs.find(target?.sessionId);
+        if (target?.side === "remote" && tab) tabs.send(tab, "upload", e.payload.paths, target.dir);
+      }),
+    ];
 
     // Quietly look for a newer release once the window is up.
-    setTimeout(async () => {
+    const updateTimer = setTimeout(async () => {
       const u = await api.updateCheck().catch(() => null);
       if (u?.newer && u.install.kind !== "other") toasts.update = u.latest;
     }, 4000);
 
-    // An AI assistant asked (via MCP) to open a connection.
-    listen<string>("mcp-open", async ({ payload: id }) => {
+    (async () => {
+      tabs.localHome = await api.localHome().catch((e) => (showError(e), tabs.localHome));
+      syncBackendLanguage();
       await store.reload().catch(showError);
-      const server = store.servers.find((s) => s.id === id);
-      if (server) tabs.open(server);
-    });
+    })();
 
-    // Files dropped from the OS file manager onto a server pane get uploaded.
-    getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type !== "drop") return;
-      const dpr = window.devicePixelRatio || 1;
-      const target = targetAt(e.payload.position.x / dpr, e.payload.position.y / dpr);
-      const tab = tabs.find(target?.sessionId);
-      if (target?.side === "remote" && tab) tabs.send(tab, "upload", e.payload.paths, target.dir);
-    });
+    return () => {
+      clearTimeout(updateTimer);
+      clearTimeout(failTimer);
+      for (const t of refreshTimers.values()) clearTimeout(t);
+      for (const off of unlisten) off.then((f) => f());
+    };
   });
 
   // Drag between the panes of one tab: local → server uploads, server → local downloads.
@@ -98,13 +113,48 @@
     tabs.send(tab, from.side === "local" ? "upload" : "download", from.paths, to.dir);
   };
 
-  // Refresh the destination pane when a transfer ends.
+  // Refresh the destination pane when a transfer ends. Every source path is its own
+  // job, so a big drop would reload the listing once per file; wait for a quiet moment.
+  const SETTLE_MS = 300;
+  const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let failed: { name: string; error: string }[] = [];
+  let failTimer: ReturnType<typeof setTimeout>;
+
+  function refreshSoon(sessionId: string, side: "local" | "remote") {
+    const key = `${sessionId}:${side}`;
+    clearTimeout(refreshTimers.get(key));
+    refreshTimers.set(
+      key,
+      setTimeout(() => {
+        refreshTimers.delete(key);
+        const tab = tabs.find(sessionId);
+        if (!tab) return;
+        if (side === "remote") tab.remoteRefresh++;
+        else tab.localRefresh++;
+      }, SETTLE_MS),
+    );
+  }
+
+  /** One toast for a batch of failures, instead of each replacing the last. */
+  function reportFailures() {
+    const list = failed;
+    failed = [];
+    if (!list.length) return;
+    const first = `${list[0].name}: ${list[0].error}`;
+    showError({
+      kind: "other",
+      message: list.length === 1 ? first : `${tn(list.length, "{n} transfer failed", "{n} transfers failed")}. ${first}`,
+    });
+  }
+
   transfers.onFinished = (job) => {
-    const tab = tabs.find(job.session_id);
-    if (!tab) return;
-    if (job.direction === "upload") tab.remoteRefresh++;
-    else tab.localRefresh++;
-    if (job.state === "failed") showError({ kind: "other", message: `${job.name}: ${job.error}` });
+    if (!tabs.find(job.session_id)) return;
+    refreshSoon(job.session_id, job.direction === "upload" ? "remote" : "local");
+    if (job.state === "failed") {
+      failed.push({ name: job.name, error: job.error ?? "" });
+      clearTimeout(failTimer);
+      failTimer = setTimeout(reportFailures, SETTLE_MS);
+    }
   };
 
   // After the editor saved a file, show the new size/date in the server pane.
@@ -136,7 +186,7 @@
   }
 
   async function remove(profile: ServerProfile) {
-    if (!confirm(t("Delete “{name}”?", { name: profile.name }))) return;
+    deleting = null;
     try {
       for (const t of tabs.list.filter((t) => t.server.id === profile.id)) await tabs.close(t);
       await api.deleteServer(profile.id);
@@ -159,12 +209,14 @@
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      switcherOpen = !switcherOpen;
+      // The switcher itself counts as an open modal; any other one keeps it closed.
+      if (switcherOpen) switcherOpen = false;
+      else if (!modalOpen()) switcherOpen = true;
       return;
     }
     // Ctrl+` toggles between files and terminal, like most editors.
     const active = tabs.active;
-    if (active && e.ctrlKey && e.key === "`") {
+    if (active && e.ctrlKey && e.key === "`" && !modalOpen()) {
       e.preventDefault();
       tabs.setView(active, active.view === "files" ? "terminal" : "files");
     }
@@ -202,8 +254,8 @@
       <TabToolbar tab={tabs.active} />
     {/if}
 
-    {#each tabs.list as tab (tab.sessionId)}
-      <TabView {tab} onrestore={restoreBackup} />
+    {#each tabs.list as tab, i (tab.sessionId)}
+      <TabView bind:tab={tabs.list[i]} onrestore={restoreBackup} />
     {/each}
 
     {#if !tabs.active}
@@ -239,7 +291,7 @@
       defaultWorkspace={store.activeWorkspace}
       onsave={save}
       oncancel={() => (dialog = null)}
-      ondelete={remove}
+      ondelete={(p) => (deleting = p)}
     />
   {/key}
 {/if}
@@ -275,6 +327,7 @@
     onopen={(s) => {
       // Opening something from another workspace switches to it.
       if (workspaceIdOf(s) !== store.activeWorkspace?.id) store.switchWorkspace(workspaceIdOf(s));
+      settings = null;
       tabs.open(s);
     }}
     onnew={newConnection}
@@ -289,6 +342,19 @@
     onrestored={() => tabs.refreshAll()}
     onclose={() => (backupsOpen = false)}
   />
+{/if}
+
+{#if deleting}
+  {@const profile = deleting}
+  <Prompt icon={TriangleAlert} color="var(--danger)" title={t("Delete “{name}”?", { name: profile.name })} onclose={() => (deleting = null)}>
+    {#snippet message()}
+      {t("Its open tabs close and the connection is removed.")}
+    {/snippet}
+    {#snippet actions()}
+      <button class="btn ghost" onclick={() => (deleting = null)}>{t("Cancel")}</button>
+      <button class="btn pri del" onclick={() => remove(profile)}>{t("Delete")}</button>
+    {/snippet}
+  </Prompt>
 {/if}
 
 {#if tabs.conflict}
@@ -331,11 +397,22 @@
   .win.folded {
     grid-template-columns: 64px minmax(0, 1fr);
   }
+  .btn.del {
+    background: var(--danger);
+    border-color: var(--danger);
+  }
   .main,
   .win > :global(.page) {
     grid-area: 1 / 2;
   }
+  /* Settings share the main area's grid cell. Isolating the main area keeps the
+     sticky headers and xterm layers inside it from painting over the page. */
+  .win > :global(.page) {
+    position: relative;
+    z-index: 1;
+  }
   .main {
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     min-width: 0;

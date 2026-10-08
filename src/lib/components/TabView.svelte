@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Laptop, Server } from "@lucide/svelte";
-  import { api, localOps, remoteOps, type Entry } from "$lib/api";
+  import { api, errorMessage, joinPath, localOps, remoteOps, type Entry, type RsyncSupport, type SyncDirection } from "$lib/api";
   import { tabs, type Tab } from "$lib/tabs.svelte";
   import { store } from "$lib/store.svelte";
   import { showError, toasts } from "$lib/toasts.svelte";
@@ -11,10 +11,38 @@
   import TunnelsView from "./TunnelsView.svelte";
   import StatusView from "./StatusView.svelte";
   import TerminalView from "./TerminalView.svelte";
+  import SyncDialog from "./SyncDialog.svelte";
 
-  let { tab, onrestore }: { tab: Tab; onrestore: (backupId: string) => void } = $props();
+  let { tab = $bindable(), onrestore }: { tab: Tab; onrestore: (backupId: string) => void } = $props();
 
   const visible = $derived(tab.sessionId === tabs.activeId);
+
+  // Whether rsync works for this connection; asked once, the first time a context menu opens.
+  let support = $state<RsyncSupport | null>(null);
+  let supportAsked = false;
+  let supportError = $state<string | null>(null);
+  let syncing = $state<{ direction: SyncDirection; local: string; remote: string } | null>(null);
+
+  function checkSupport() {
+    if (supportAsked) return;
+    supportAsked = true;
+    api
+      .rsyncSupport(tab.sessionId)
+      .then((s) => (support = s))
+      .catch((e) => (supportError = errorMessage(e)));
+  }
+
+  /** null when sync can be used; otherwise the reason, for the disabled menu item's tooltip. */
+  const syncReason = $derived(supportError ?? (support ? (support.available ? null : (support.reason ?? t("Sync isn't available here"))) : t("Checking for rsync…")));
+
+  /** The other pane's current folder plus this folder's name, like a drop. */
+  function sync(direction: SyncDirection, folder: string) {
+    const name = folder.replace(/\/+$/, "").split("/").pop() ?? "";
+    syncing =
+      direction === "to_server"
+        ? { direction, local: folder, remote: name ? joinPath(tab.remotePath, name) : tab.remotePath }
+        : { direction, local: name ? joinPath(tab.localPath, name) : tab.localPath, remote: folder };
+  }
 
   async function openFile(side: "local" | "remote", entry: Entry) {
     try {
@@ -42,6 +70,10 @@
         load={api.localList}
         sendLabel={t("Upload to {name}", { name: tab.server.name })}
         onsend={(paths) => tabs.send(tab, "upload", paths)}
+        syncLabel={t("Sync this folder to server…")}
+        {syncReason}
+        onsync={(folder) => sync("to_server", folder)}
+        onmenuopen={checkSupport}
         ondeleted={(tx) => toasts.offerUndo(tx, null)}
         onopenfile={(entry) => openFile("local", entry)}
       />
@@ -51,6 +83,10 @@
         refreshKey={tab.remoteRefresh}
         sendLabel={t("Download to local")}
         onsend={(paths) => tabs.send(tab, "download", paths)}
+        syncLabel={t("Sync this folder from server…")}
+        {syncReason}
+        onsync={(folder) => sync("from_server", folder)}
+        onmenuopen={checkSupport}
         ondeleted={(tx) => toasts.offerUndo(tx, tab.sessionId)}
         onopenfile={(entry) => openFile("remote", entry)}
         label={tab.server.name}
@@ -68,6 +104,15 @@
       <EditsBar sessionId={tab.sessionId} onerror={showError} />
       <TransferQueue sessionId={tab.sessionId} {onrestore} onerror={showError} />
     </div>
+  {/if}
+  {#if syncing}
+    <SyncDialog
+      sessionId={tab.sessionId}
+      serverName={tab.server.name}
+      {...syncing}
+      pullWarning={support?.pull_warning}
+      onclose={() => (syncing = null)}
+    />
   {/if}
   {#if tab.hasTerminal}
     <div class="pagewrap" class:hidden={tab.view !== "tunnels"}>

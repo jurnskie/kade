@@ -32,13 +32,21 @@
     if (!user.trim() && item.username) user = item.username;
   }
 
-  const logins = $derived.by(() => {
+  const LIMIT = 40;
+  const matches = $derived.by(() => {
     const q = op.query.trim().toLowerCase();
     const items = op.items ?? [];
-    const hits = q
+    return q
       ? items.filter((i) => `${i.title} ${i.username ?? ""} ${i.url ?? ""} ${i.vault}`.toLowerCase().includes(q))
       : items;
-    return hits.slice(0, 40);
+  });
+  const logins = $derived(matches.slice(0, LIMIT));
+  const wsKey = $derived(op.defaultKey);
+  // While the key list is deferred, the title saved with the workspace stands in; older workspaces only have the fingerprint.
+  const wsKeyTitle = $derived.by(() => {
+    const key = op.workspaceKey;
+    if (!key) return "";
+    return op.keys?.find((k) => k.fingerprint === key.fingerprint)?.title ?? key.title ?? key.fingerprint.replace("SHA256:", "").slice(0, 12) + "…";
   });
   const selected = $derived(op.items?.find((i) => i.reference === reference) ?? null);
 
@@ -62,6 +70,7 @@
   );
 </script>
 
+{#if !(listing === "keys" && op.usesDefaultKey)}
 <div class="scope">
   {#if (op.accounts?.length ?? 0) > 1}
     <select bind:value={op.account} title={t("1Password account")} onchange={() => (op.picked = true)}>
@@ -70,14 +79,27 @@
   {:else if op.accounts?.length === 1}
     <span class="acct" title={op.accounts[0].email}>{op.accounts[0].url}</span>
   {/if}
-  <select bind:value={op.vault} title={t("Vault")}>
+  <select bind:value={op.vault} title={t("Vault")} onchange={() => (op.vaultPicked = true)}>
     <option value="">{t("All vaults")}</option>
     {#each op.vaults as v (v.id)}<option value={v.id}>{v.name}</option>{/each}
   </select>
 </div>
+{/if}
 
-{#if listing === "keys"}
-  <PickList {rows} loading={op.loading ? t("Fetching keys…") : null} error={op.error} empty={t("No SSH keys in this vault.")} />
+{#if listing === "keys" && op.usesDefaultKey}
+  <p class="ws-key"><OnePasswordIcon size={13} />{t("Uses the workspace's default key: {key}", { key: wsKeyTitle })}</p>
+  <button class="btn another" onclick={() => op.browse()}>{t("Choose another key")}</button>
+{:else if listing === "keys"}
+  {#if wsKey && !pinned && !keyItem}
+    <p class="ws-key"><OnePasswordIcon size={13} />{t("Uses the workspace's default key: {key}", { key: wsKeyTitle })}</p>
+  {/if}
+  <PickList
+    {rows}
+    loading={op.loading ? t("Fetching keys…") : null}
+    error={op.error}
+    onretry={() => op.retry()}
+    empty={t("No SSH keys in this vault.")}
+  />
   <p class="hint">
     {t("Kade tries the 1Password SSH agent first. If it doesn't offer the key on this computer (e.g. a work laptop), Kade fetches it from this account and vault.")}
   </p>
@@ -95,8 +117,12 @@
     {rows}
     loading={op.loading ? t("Fetching logins… (1Password may ask for approval)") : null}
     error={op.error}
+    onretry={() => op.retry()}
     empty={t("No logins found.")}
   />
+  {#if matches.length > LIMIT}
+    <p class="hint">{t("Showing {shown} of {n} — search to narrow down", { shown: LIMIT, n: matches.length })}</p>
+  {/if}
 {/if}
 
 <style>
@@ -137,6 +163,16 @@
     display: block;
     font-size: 11px;
     color: var(--ink2);
+  }
+  .ws-key {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 12px;
+    color: var(--ink2);
+  }
+  .another {
+    align-self: flex-start;
   }
   .small {
     font-size: 11px;

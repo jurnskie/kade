@@ -3,6 +3,7 @@
   import type { Auth, Protocol, ServerProfile, Workspace } from "$lib/api";
   import { workspaceIdOf } from "$lib/workspaces";
   import { t } from "$lib/i18n.svelte";
+  import { isMac } from "$lib/keys";
   import Modal from "./Modal.svelte";
   import ServerFields from "./connect/ServerFields.svelte";
   import AuthOptions, { type AuthChoice } from "./connect/AuthOptions.svelte";
@@ -49,13 +50,20 @@
     startAuth?.method === "one_password" || startAuth?.method === "agent" ? startAuth.key_fingerprint : null,
   );
 
-  const wsAccount = $derived(workspaces.find((w) => w.id === workspace)?.op_account ?? "");
+  const ws = $derived(workspaces.find((w) => w.id === workspace));
+  const wsAccount = $derived(ws?.op_account ?? "");
   const op = new OnePassword(
     (startAuth?.method === "one_password" || startAuth?.method === "one_password_secret") && startAuth.account
       ? startAuth.account
       : "",
     () => (authChoice === "one_password" ? "keys" : authChoice === "one_password_secret" ? "logins" : null),
     () => wsAccount,
+    () => ws?.op_vault ?? "",
+    () =>
+      ws?.op_key_fingerprint
+        ? { fingerprint: ws.op_key_fingerprint, item: ws.op_key_item, title: ws.op_key_title ?? null, account: ws.op_account ?? "" }
+        : null,
+    () => !!pinned || !!keyItem,
   );
 
   const isFtp = $derived(protocol === "ftp" || protocol === "ftps");
@@ -112,8 +120,17 @@
     };
   }
 
-  function submit(connect: boolean) {
-    if (valid) onsave(build(), connect);
+  let saving = $state(false);
+
+  /** `onsave` may be async; once called, further clicks must not create a second profile. */
+  async function submit(connect: boolean) {
+    if (!valid || saving) return;
+    saving = true;
+    try {
+      await onsave(build(), connect);
+    } finally {
+      saving = false;
+    }
   }
 </script>
 
@@ -133,7 +150,7 @@
 
   <div class="body">
     <div class="col">
-      <div class="lbl">Protocol</div>
+      <div class="lbl">{t("Protocol")}</div>
       <ServerFields
         {protocol}
         onprotocol={setProtocol}
@@ -162,9 +179,9 @@
     {/if}
     <div class="actions">
       <button class="btn ghost" onclick={oncancel}>{t("Cancel")}</button>
-      <button class="btn" disabled={!valid} onclick={() => submit(false)}>{t("Save")}</button>
-      <button class="btn pri" disabled={!valid} onclick={() => submit(true)}>
-        {t("Save & connect")} <kbd>Ctrl+Enter</kbd>
+      <button class="btn" disabled={!valid || saving} onclick={() => submit(false)}>{t("Save")}</button>
+      <button class="btn pri" disabled={!valid || saving} onclick={() => submit(true)}>
+        {t("Save & connect")} <kbd>{isMac ? "⌘ Enter" : "Ctrl+Enter"}</kbd>
       </button>
     </div>
   </div>
@@ -238,7 +255,7 @@
     font-size: 12.5px;
   }
   .body :global(.in input::placeholder) {
-    color: var(--faint);
+    color: var(--lichen);
   }
   .body :global(.hint) {
     font-size: 11.5px;

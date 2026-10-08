@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { onMount } from "svelte";
   import { X } from "@lucide/svelte";
   import { t } from "$lib/i18n.svelte";
+  import { isTopModal, pushModal } from "$lib/modals";
 
   let {
     onclose,
@@ -39,12 +41,54 @@
     header?: Snippet<[close: Snippet]>;
     children: Snippet;
   } = $props();
+
+  const FOCUSABLE =
+    'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  let sheet = $state<HTMLDivElement>();
+  let modal: ReturnType<typeof pushModal> | undefined;
+
+  const focusables = () =>
+    [...(sheet?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.getClientRects().length > 0);
+
+  onMount(() => {
+    modal = pushModal();
+    const before = document.activeElement as HTMLElement | null;
+    // An `autofocus` child already took focus; otherwise start on the first field or button, not the close button.
+    if (!sheet?.contains(document.activeElement)) {
+      const items = focusables();
+      (items.find((el) => !el.classList.contains("x")) ?? items[0] ?? sheet)?.focus();
+    }
+    return () => {
+      modal?.pop();
+      if (before?.isConnected) before.focus();
+    };
+  });
+
+  function onKey(e: KeyboardEvent) {
+    if (!modal || !isTopModal(modal.id)) return;
+    if (e.key === "Escape") {
+      // Claim it, so a page underneath doesn't also close on this very keypress.
+      e.preventDefault();
+      if (escape) onclose();
+    } else if (e.key === "Tab" && sheet) {
+      const items = focusables();
+      if (!items.length) return e.preventDefault();
+      const [first, last] = [items[0], items[items.length - 1]];
+      const at = document.activeElement;
+      if (!sheet.contains(at)) (e.preventDefault(), (e.shiftKey ? last : first).focus());
+      else if (e.shiftKey && at === first) (e.preventDefault(), last.focus());
+      else if (!e.shiftKey && at === last) (e.preventDefault(), first.focus());
+    }
+  }
 </script>
 
-<svelte:window onkeydown={(e) => escape && e.key === "Escape" && onclose()} />
+<svelte:window onkeydown={onKey} />
 
 <div class="scrim" class:blur role="presentation" style:z-index={z} onclick={onclose}></div>
 <div
+  bind:this={sheet}
+  tabindex="-1"
   class="sheet"
   class:padded={pad != null}
   class:hung={top != null}
@@ -87,7 +131,11 @@
     border-radius: 14px;
     box-shadow: var(--shadow-lg);
     overflow: hidden;
+    -webkit-user-select: text;
     user-select: text;
+  }
+  .sheet:focus {
+    outline: none;
   }
   .sheet.padded {
     overflow-y: auto;

@@ -2,9 +2,10 @@
   import { onMount, tick } from "svelte";
   import { open as pickFolder } from "@tauri-apps/plugin-dialog";
   import { listen } from "@tauri-apps/api/event";
-  import { CloudCheck, FolderSync, GitMerge, Import, X } from "@lucide/svelte";
+  import { Check, CloudCheck, FolderSync, GitMerge, Import, X } from "@lucide/svelte";
   import { i18n, t, tn, type LangChoice } from "$lib/i18n.svelte";
-  import { theme, type ThemeChoice } from "$lib/theme.svelte";
+  import { modalOpen } from "$lib/modals";
+  import { PALETTES, theme, type ThemeChoice } from "$lib/theme.svelte";
   import { api, errorMessage, type EditorChoice, type McpStatus, type Settings, type SyncStatus, type UpdateInfo } from "$lib/api";
 
   let {
@@ -36,11 +37,15 @@
 
   /** Set while scrolling to a clicked section, which then stays highlighted. */
   let jumping = false;
+  let jumpTimer: ReturnType<typeof setTimeout>;
 
   function jump(id: string) {
     current = id;
     jumping = true;
     document.getElementById(`set-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // No scroll means no `scrollend`, e.g. when the section is already in place.
+    clearTimeout(jumpTimer);
+    jumpTimer = setTimeout(() => (jumping = false), 1000);
   }
 
   // Highlight the section being read: the last one whose heading has passed the top third.
@@ -209,7 +214,7 @@
 
 <!-- Escape closes the page, unless a dialog on top of it takes it. -->
 <svelte:window
-  onkeydown={(e) => e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[aria-modal="true"]') && onclose()}
+  onkeydown={(e) => e.key === "Escape" && !e.defaultPrevented && !modalOpen() && onclose()}
 />
 
 {#snippet segmented(name: string, label: string, options: [string, string][], value: string, set: (v: string) => void)}
@@ -232,7 +237,7 @@
     <button class="btn close" onclick={onclose} title={t("Close")} aria-label={t("Close")}><X size={16} /></button>
   </header>
 
-  <div class="body" bind:this={scroller} onscroll={track} onscrollend={() => (jumping = false)}>
+  <div class="body" bind:this={scroller} onscroll={track} onscrollend={() => (clearTimeout(jumpTimer), (jumping = false))}>
     <nav aria-label={t("Settings")}>
       {#each sections as s (s.id)}
         <button class:on={current === s.id} aria-current={current === s.id ? "true" : undefined} onclick={() => jump(s.id)}>
@@ -248,8 +253,29 @@
         <h2>{t("General")}</h2>
         <div class="group">
           <div class="row">
-            <div class="what"><b>{t("Theme")}</b><small>{t("Automatic follows your system.")}</small></div>
-            {@render segmented("theme", t("Theme"), themes, theme.choice, (v) => theme.set(v as ThemeChoice))}
+            <div class="what"><b>{t("Mode")}</b><small>{t("Automatic follows your system.")}</small></div>
+            {@render segmented("theme", t("Mode"), themes, theme.choice, (v) => theme.set(v as ThemeChoice))}
+          </div>
+          <div class="row palette">
+            <div class="what"><b>{t("Colour theme")}</b><small>{t("Each theme has a light and a dark version.")}</small></div>
+            <div class="cards" role="radiogroup" aria-label={t("Colour theme")}>
+              {#each PALETTES as p (p.id)}
+                {@const on = theme.palette === p.id}
+                <label class="card" class:on>
+                  <input type="radio" name="palette" checked={on} onchange={() => theme.setPalette(p.id)} />
+                  <!-- Painted by the palette's own tokens, in the scheme that's active now. -->
+                  <span class="mini" data-palette={p.id} data-scheme={theme.scheme} aria-hidden="true">
+                    <span class="m-rail"><i></i><i></i><i></i></span>
+                    <span class="m-pane">
+                      <i class="bar"></i><i class="bar short"></i>
+                      <i class="pill"></i>
+                      <i class="sel"></i>
+                    </span>
+                  </span>
+                  <span class="name">{p.name}{#if on}<Check size={13} />{/if}</span>
+                </label>
+              {/each}
+            </div>
           </div>
           <div class="row">
             <div class="what"><b>{t("Language of the app")}</b></div>
@@ -627,6 +653,107 @@
     outline-offset: 1px;
   }
 
+  /* Colour theme: the cards sit below the label instead of in the segmented slot. */
+  .row.palette {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 10px;
+  }
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 6px 6px 8px;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .card:hover {
+    background: var(--mist2);
+  }
+  .card.on {
+    border-color: var(--pine);
+  }
+  .card input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .card:has(input:focus-visible) {
+    outline: 2px solid var(--pine);
+    outline-offset: 1px;
+  }
+  .name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    font-weight: 600;
+    color: var(--granite);
+  }
+  .mini {
+    display: flex;
+    height: 68px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--snow);
+    border: 1px solid var(--mist);
+  }
+  .m-rail {
+    flex: none;
+    width: 28%;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 6px;
+    background: var(--rail);
+    border-right: 1px solid var(--mist);
+  }
+  .m-rail i {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--mist);
+  }
+  .m-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 6px;
+    padding: 6px;
+    border-radius: 4px;
+    background: var(--paper);
+  }
+  .m-pane i {
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+  }
+  .m-pane .bar {
+    background: var(--ink2);
+  }
+  .m-pane .short {
+    width: 60%;
+  }
+  .m-pane .pill {
+    width: 36%;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 4px;
+  }
+  .m-pane .sel {
+    height: 8px;
+    margin-top: auto;
+    border-radius: 3px;
+    background: var(--accent-t);
+  }
+
   .switch {
     flex-shrink: 0;
     width: 36px;
@@ -713,7 +840,11 @@
     align-items: flex-start;
   }
   .cmd code {
-    word-break: break-all;
+    /* Wrap at spaces; a long token (bearer token, URL) scrolls instead of splitting mid-word. */
+    white-space: pre-wrap;
+    word-break: normal;
+    overflow-wrap: normal;
+    overflow-x: auto;
     padding: 6px 8px;
   }
   .btn.sm {

@@ -1,0 +1,360 @@
+/* Kade colour themes. Palette x scheme, both set as attributes on <html> (see
+   theme.svelte.ts and app.html): data-palette = pine | haven | duin | schemer,
+   data-scheme = light | dark. Rules are element-level on purpose: the Settings
+   preview cards set both attributes on themselves to paint any palette in any
+   scheme. Don't scope these to :root.
+
+   Palette blocks hold surfaces, text, borders, the accent family, the inverse
+   chip and the terminal. Shared status colours, shadows and workspace colours
+   follow the scheme only. Contrast of every pair is documented in
+   docs/plans/themes.md; keep text at 4.5:1 and UI edges at 3:1 when editing. */
+
+/* Shared, light. */
+:root {
+  --glass: rgba(255, 255, 255, 0.55);
+  /* Connected / online: green in every palette, so it never reads as a warning. */
+  --online: #17723a;
+  --online-t: #e0f1e5;
+  --amber: #b7791f;
+  --amber-t: #f6eedf;
+  --amber-ink: #7a5212;
+  --amber-line: #ead7b4;
+  --danger: #b4412f;
+  --danger-hover: #9a3727;
+  --danger-t: #f7e6e2;
+  --danger-line: #ecc9c2;
+  --on-danger: #ffffff;
+  --op-blue: #0572ec;
+  --scrim: rgba(30, 35, 33, 0.32);
+  --shadow-lg: 0 30px 80px rgba(15, 21, 19, 0.28);
+  --shadow-md: 0 12px 32px rgba(15, 21, 19, 0.16);
+  --shadow-sm: 0 1px 2px rgba(30, 35, 33, 0.08);
+  /* Workspace colours: the same six hues in every palette, lifted in dark.
+     --on-ws-* is the glyph colour on top of the dot. */
+  --ws-pine: #1d6b57;
+  --ws-blue: #2f6fb0;
+  --ws-amber: #b7791f;
+  --ws-plum: #8a4f8f;
+  --ws-coral: #c2553f;
+  --ws-slate: #4a524e;
+  --on-ws-pine: #ffffff;
+  --on-ws-blue: #ffffff;
+  --on-ws-amber: #14110a;
+  --on-ws-plum: #ffffff;
+  --on-ws-coral: #ffffff;
+  --on-ws-slate: #ffffff;
+  color-scheme: light;
+}
+
+/* Shared, dark. Placed before the palette blocks so a palette can override. */
+[data-scheme="dark"] {
+  --glass: rgba(255, 255, 255, 0.04);
+  --online: #6fcf8f;
+  --online-t: #1b3426;
+  --amber: #e3a84c;
+  --amber-t: #3a2f1c;
+  --amber-ink: #f0c47a;
+  --amber-line: #5a4626;
+  --danger: #ec7a66;
+  --danger-hover: #f39482;
+  --danger-t: #3e2421;
+  --danger-line: #5f3530;
+  --on-danger: #1f0d0a;
+  --op-blue: #4c9bf5;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ws-pine: #3a9a80;
+  --ws-blue: #5b93d0;
+  --ws-amber: #c98a2e;
+  --ws-plum: #b072b5;
+  --ws-coral: #d9715a;
+  --ws-slate: #87918b;
+  --on-ws-pine: #14110a;
+  --on-ws-blue: #14110a;
+  --on-ws-amber: #14110a;
+  --on-ws-plum: #14110a;
+  --on-ws-coral: #14110a;
+  --on-ws-slate: #14110a;
+  color-scheme: dark;
+}
+
+/* Pine — alpine hut green */
+:root,
+[data-palette="pine"] {
+  --snow: #f6f7f4;
+  --paper: #ffffff;
+  --rail: #eef1ec;
+  --granite: #1e2321;
+  --ink2: #4a524e;
+  --lichen: #66716b;
+  --faint: #98a19b;
+  --mist: #e4e8e3;
+  --mist2: #eef1ed;
+  --line-strong: #cfd6d1;
+  --control: #889490;
+  --zebra: #fafbf9;
+  --accent: #1d6b57;
+  --accent-hover: #185a49;
+  --accent-t: #e3efea;
+  --on-accent: #ffffff;
+  --inverse: #1e2321;
+  --on-inverse: #ffffff;
+  /* Terminal: dark in both schemes. */
+  --term-bg: #0f1513;
+  --term-fg: #d9dfdb;
+  --term-cursor: #5fc79e;
+  --term-sel: #2a3d35;
+  --term-raise: #1a2420;
+  --term-line: #1c2723;
+  --term-line2: #233029;
+  --term-chip: #18221e;
+  --term-0: #18221e;
+  --term-1: #e06c5a;
+  --term-2: #5fc79e;
+  --term-3: #e0a84a;
+  --term-4: #8fb8e8;
+  --term-5: #c79bd8;
+  --term-6: #6fc3c0;
+  --term-7: #d9dfdb;
+  --term-8: #7d8a84;
+  --term-9: #f08a78;
+  --term-10: #7fdcb5;
+  --term-11: #f0c070;
+  --term-12: #aacdf2;
+  --term-13: #dab3e8;
+  --term-14: #8fd8d5;
+  --term-15: #f4f6f4;
+}
+[data-palette="pine"][data-scheme="dark"] {
+  --snow: #141816;
+  --paper: #1b201e;
+  --rail: #171b19;
+  --granite: #e6eae7;
+  --ink2: #b3bbb6;
+  --lichen: #87918b;
+  --faint: #6c7670;
+  --mist: #2b322f;
+  --mist2: #242a27;
+  --line-strong: #3a423e;
+  --control: #6a746f;
+  --zebra: #1e2321;
+  --accent: #4fb393;
+  --accent-hover: #63c4a4;
+  --accent-t: #1e3a31;
+  --on-accent: #0b1d17;
+  --inverse: #e6eae7;
+  --on-inverse: #141816;
+}
+
+/* Haven — steel blue and slate */
+[data-palette="haven"] {
+  --snow: #f3f6f9;
+  --paper: #ffffff;
+  --rail: #e9eef3;
+  --granite: #17212b;
+  --ink2: #435262;
+  --lichen: #5f6f80;
+  --faint: #9aa8b6;
+  --mist: #dde5ec;
+  --mist2: #e9eef3;
+  --line-strong: #c5d0da;
+  --control: #8493a3;
+  --zebra: #f8fafc;
+  --accent: #2559a0;
+  --accent-hover: #1d4a87;
+  --accent-t: #e1ebf7;
+  --on-accent: #ffffff;
+  --inverse: #17212b;
+  --on-inverse: #ffffff;
+  /* Terminal: dark in both schemes. */
+  --term-bg: #0d141b;
+  --term-fg: #d6dee7;
+  --term-cursor: #6aa6ea;
+  --term-sel: #233a55;
+  --term-raise: #16202b;
+  --term-line: #19232e;
+  --term-line2: #223042;
+  --term-chip: #17212b;
+  --term-0: #17212b;
+  --term-1: #e4786a;
+  --term-2: #68c49a;
+  --term-3: #e0b050;
+  --term-4: #78aef0;
+  --term-5: #c3a0e6;
+  --term-6: #5cc6d0;
+  --term-7: #d6dee7;
+  --term-8: #7a8aa0;
+  --term-9: #f2907f;
+  --term-10: #86d9b0;
+  --term-11: #efc472;
+  --term-12: #9cc6f6;
+  --term-13: #d6b8f0;
+  --term-14: #86dae2;
+  --term-15: #f3f7fb;
+}
+[data-palette="haven"][data-scheme="dark"] {
+  --snow: #10161d;
+  --paper: #18202a;
+  --rail: #131a22;
+  --granite: #e4eaf1;
+  --ink2: #b0bccb;
+  --lichen: #8a98aa;
+  --faint: #667385;
+  --mist: #26313e;
+  --mist2: #212b37;
+  --line-strong: #34414f;
+  --control: #6a7889;
+  --zebra: #1b2430;
+  --accent: #6aa6ea;
+  --accent-hover: #82b5ee;
+  --accent-t: #1b3250;
+  --on-accent: #08182b;
+  --inverse: #e4eaf1;
+  --on-inverse: #10161d;
+}
+
+/* Duin — warm sand, clay accent */
+[data-palette="duin"] {
+  --snow: #f7f3ec;
+  --paper: #fffdf9;
+  --rail: #efe9de;
+  --granite: #2a231c;
+  --ink2: #5a4e42;
+  --lichen: #75675a;
+  --faint: #a89c8c;
+  --mist: #e8e0d3;
+  --mist2: #f0eadf;
+  --line-strong: #d6ccbb;
+  --control: #948675;
+  --zebra: #fbf8f2;
+  --accent: #a8472a;
+  --accent-hover: #8f3c23;
+  --accent-t: #f6e4dc;
+  --on-accent: #ffffff;
+  --inverse: #2a231c;
+  --on-inverse: #ffffff;
+  --danger: #b3263e;
+  --danger-hover: #96203a;
+  --danger-t: #f8e3e6;
+  --danger-line: #eec3ca;
+  --on-danger: #ffffff;
+  /* Terminal: dark in both schemes. */
+  --term-bg: #17120f;
+  --term-fg: #e4dacd;
+  --term-cursor: #e58d66;
+  --term-sel: #4a3226;
+  --term-raise: #211a15;
+  --term-line: #231c17;
+  --term-line2: #30261e;
+  --term-chip: #241d18;
+  --term-0: #241d18;
+  --term-1: #ee7a70;
+  --term-2: #9fcf7a;
+  --term-3: #e8b24f;
+  --term-4: #7fb0e0;
+  --term-5: #d49ac4;
+  --term-6: #6cc3b4;
+  --term-7: #e4dacd;
+  --term-8: #948777;
+  --term-9: #f89a90;
+  --term-10: #b8e094;
+  --term-11: #f2c872;
+  --term-12: #a0c6ec;
+  --term-13: #e4b4d6;
+  --term-14: #8fd6c8;
+  --term-15: #f8f2e9;
+}
+[data-palette="duin"][data-scheme="dark"] {
+  --snow: #1a1613;
+  --paper: #231e1a;
+  --rail: #1e1a16;
+  --granite: #efe8de;
+  --ink2: #c0b5a6;
+  --lichen: #9d9181;
+  --faint: #6f6558;
+  --mist: #352e27;
+  --mist2: #2b2520;
+  --line-strong: #453d34;
+  --control: #796d5f;
+  --zebra: #27221d;
+  --accent: #e58d66;
+  --accent-hover: #ee9f7b;
+  --accent-t: #43271c;
+  --on-accent: #2a1209;
+  --inverse: #efe8de;
+  --on-inverse: #1a1613;
+  --danger: #f0788c;
+  --danger-hover: #f58ea0;
+  --danger-t: #42222a;
+  --danger-line: #62303a;
+  --on-danger: #2a0a12;
+}
+
+/* Schemer — muted dusk violet */
+[data-palette="schemer"] {
+  --snow: #f5f3f7;
+  --paper: #ffffff;
+  --rail: #ece9f1;
+  --granite: #211d2b;
+  --ink2: #4e4860;
+  --lichen: #6b647d;
+  --faint: #a39db3;
+  --mist: #e4e0ea;
+  --mist2: #ece9f1;
+  --line-strong: #d0cada;
+  --control: #8d869f;
+  --zebra: #faf9fc;
+  --accent: #6a4a99;
+  --accent-hover: #593d82;
+  --accent-t: #ebe5f4;
+  --on-accent: #ffffff;
+  --inverse: #211d2b;
+  --on-inverse: #ffffff;
+  /* Terminal: dark in both schemes. */
+  --term-bg: #120f19;
+  --term-fg: #dcd7e6;
+  --term-cursor: #b49be0;
+  --term-sel: #33294d;
+  --term-raise: #1b1726;
+  --term-line: #1d1929;
+  --term-line2: #2a2339;
+  --term-chip: #1e1a2a;
+  --term-0: #1e1a2a;
+  --term-1: #ec7a8e;
+  --term-2: #7fd0a4;
+  --term-3: #e6b86a;
+  --term-4: #86a8ee;
+  --term-5: #c9a0f0;
+  --term-6: #6cc7d4;
+  --term-7: #dcd7e6;
+  --term-8: #8379a0;
+  --term-9: #f493a4;
+  --term-10: #9ce0ba;
+  --term-11: #f0cb8a;
+  --term-12: #a8c0f6;
+  --term-13: #dcb8f6;
+  --term-14: #8fdae4;
+  --term-15: #f6f3fb;
+}
+[data-palette="schemer"][data-scheme="dark"] {
+  --snow: #16131c;
+  --paper: #1e1a26;
+  --rail: #191620;
+  --granite: #e9e6ef;
+  --ink2: #b9b3c8;
+  --lichen: #968fa8;
+  --faint: #6a6379;
+  --mist: #2d2839;
+  --mist2: #262230;
+  --line-strong: #3d374c;
+  --control: #7a7390;
+  --zebra: #221e2b;
+  --accent: #b49be0;
+  --accent-hover: #c5b0ea;
+  --accent-t: #2f2745;
+  --on-accent: #1a1128;
+  --inverse: #e9e6ef;
+  --on-inverse: #16131c;
+}

@@ -29,6 +29,33 @@ pub struct Meta {
     pub mtime: Option<i64>,
 }
 
+/// Mode and owner of a file that is about to be overwritten. A new file would
+/// otherwise come out with the server's defaults (e.g. a private 0600 file
+/// turning world-readable, or an executable losing its bit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    mode: Option<u32>,
+    uid: Option<u32>,
+    gid: Option<u32>,
+}
+
+impl Kept {
+    fn from_sftp(m: &FileAttributes) -> Option<Kept> {
+        let kept = Kept { mode: m.permissions.map(|p| p & 0o7777), uid: m.uid, gid: m.gid };
+        (kept.mode.is_some() || kept.uid.is_some() || kept.gid.is_some()).then_some(kept)
+    }
+
+    fn attrs(&self, with_owner: bool) -> FileAttributes {
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = self.mode;
+        if with_owner {
+            attrs.uid = self.uid;
+            attrs.gid = self.gid;
+        }
+        attrs
+    }
+}
+
 pub enum RemoteFs {
     Sftp(SftpSession),
     Ftp(Ftp),
@@ -314,6 +341,35 @@ impl RemoteFs {
         }
     }
 
+    /// Where an overwrite of `path` has to land, and what to restore on the new
+    /// file. A symlink is followed, so the target is replaced (and backed up)
+    /// instead of the link. FTP can't read modes reliably, so it keeps `path`.
+    pub async fn overwrite_target(&self, path: &str) -> AppResult<(String, Option<Kept>)> {
+        let RemoteFs::Sftp(sftp) = self else { return Ok((path.to_string(), None)) };
+        let attrs = match sftp.symlink_metadata(path).await {
+            Ok(m) => m,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok((path.to_string(), None)),
+            Err(e) => return Err(e.into()),
+        };
+        if !attrs.file_type().is_symlink() {
+            return Ok((path.to_string(), Kept::from_sftp(&attrs)));
+        }
+        // A dangling link has no target to resolve; writing creates it as before.
+        let Ok(target) = sftp.canonicalize(path).await else { return Ok((path.to_string(), None)) };
+        let kept = sftp.metadata(target.clone()).await.ok().and_then(|m| Kept::from_sftp(&m));
+        Ok((target, kept))
+    }
+
+    /// Best effort: give a freshly written file its old mode and owner back.
+    /// Changing the owner usually needs root, so a refusal there still keeps the mode.
+    pub async fn restore_kept(&self, path: &str, kept: &Kept) {
+        if let RemoteFs::Sftp(sftp) = self {
+            if sftp.set_metadata(path, kept.attrs(true)).await.is_err() && kept.mode.is_some() {
+                let _ = sftp.set_metadata(path, kept.attrs(false)).await;
+            }
+        }
+    }
+
     /// Delete a file, symlink or directory tree. Symlinks are removed, never followed.
     pub async fn delete_tree(&self, path: &str) -> AppResult<()> {
         crate::fs::guard(path)?;
@@ -362,7 +418,22 @@ impl RemoteFs {
 
 #[cfg(test)]
 mod tests {
-    use super::is_plain_name;
+    use super::{is_plain_name, Kept};
+    use russh_sftp::protocol::FileAttributes;
+
+    #[test]
+    fn kept_drops_file_type_bits_and_owner_on_demand() {
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = Some(0o100755);
+        attrs.uid = Some(1000);
+        attrs.gid = Some(33);
+        let kept = Kept::from_sftp(&attrs).unwrap();
+        assert_eq!(kept.attrs(true).permissions, Some(0o755));
+        assert_eq!(kept.attrs(true).uid, Some(1000));
+        assert_eq!(kept.attrs(false).permissions, Some(0o755));
+        assert_eq!((kept.attrs(false).uid, kept.attrs(false).gid), (None, None));
+        assert!(Kept::from_sftp(&FileAttributes::empty()).is_none());
+    }
 
     #[test]
     fn plain_names_only() {

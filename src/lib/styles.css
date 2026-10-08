@@ -1,122 +1,19 @@
-/* Kade — "alpine hut" palette from the Doop design. One accent: pine. */
-/* Light is the default; dark applies when the system asks for it (unless the
-   user picked Light) or when the user picked Dark. Settings → Appearance. */
-:root {
-  --snow: #f6f7f4;
-  --paper: #ffffff;
-  --rail: #eef1ec;
-  --granite: #1e2321;
-  --ink2: #4a524e;
-  --lichen: #7c8780;
-  --faint: #a9b1ac;
-  --mist: #e4e8e3;
-  --mist2: #eef1ed;
-  --line-strong: #cfd6d1;
-  --control: #b9c1bc;
-  --zebra: #fafbf9;
-  --glass: rgba(255, 255, 255, 0.55);
-  --pine: #1d6b57;
-  --pine-hover: #185a49;
-  --pine-t: #e3efea;
-  --on-pine: #ffffff;
-  --amber: #b7791f;
-  --amber-t: #f6eedf;
-  --amber-ink: #7a5212;
-  --amber-line: #ead7b4;
-  --danger: #b4412f;
-  --danger-hover: #9a3727;
-  --danger-t: #f7e6e2;
-  --danger-line: #ecc9c2;
-  --on-danger: #ffffff;
-  --op-blue: #0572ec;
-  /* Dark chips (toasts, drag ghost) on top of everything. */
-  --inverse: #1e2321;
-  --on-inverse: #ffffff;
-  --scrim: rgba(30, 35, 33, 0.32);
-  --shadow-lg: 0 30px 80px rgba(15, 21, 19, 0.28);
-  --shadow-md: 0 12px 32px rgba(15, 21, 19, 0.16);
-  --shadow-sm: 0 1px 2px rgba(30, 35, 33, 0.08);
+/* Kade — colour tokens live in themes.css: four palettes (Pine, Haven, Duin,
+   Schemer), each in light and dark, picked in Settings → General. */
+@import "./themes.css";
 
+:root {
   --sans: "Instrument Sans", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
-
-  color-scheme: light;
 }
 
-/* Alpine night: same pine accent, lifted for contrast on dark surfaces. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --snow: #141816;
-    --paper: #1b201e;
-    --rail: #171b19;
-    --granite: #e6eae7;
-    --ink2: #b3bbb6;
-    --lichen: #87918b;
-    --faint: #5f6964;
-    --mist: #2b322f;
-    --mist2: #242a27;
-    --line-strong: #3a423e;
-    --control: #4d5651;
-    --zebra: #1e2321;
-    --glass: rgba(255, 255, 255, 0.04);
-    --pine: #4fb393;
-    --pine-hover: #63c4a4;
-    --pine-t: #1e3a31;
-    --on-pine: #0b1d17;
-    --amber: #e3a84c;
-    --amber-t: #3a2f1c;
-    --amber-ink: #f0c47a;
-    --amber-line: #5a4626;
-    --danger: #ec7a66;
-    --danger-hover: #f39482;
-    --danger-t: #3e2421;
-    --danger-line: #5f3530;
-    --on-danger: #1f0d0a;
-    --op-blue: #4c9bf5;
-    --inverse: #e6eae7;
-    --on-inverse: #141816;
-    --scrim: rgba(0, 0, 0, 0.5);
-    --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
-    --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --snow: #141816;
-  --paper: #1b201e;
-  --rail: #171b19;
-  --granite: #e6eae7;
-  --ink2: #b3bbb6;
-  --lichen: #87918b;
-  --faint: #5f6964;
-  --mist: #2b322f;
-  --mist2: #242a27;
-  --line-strong: #3a423e;
-  --control: #4d5651;
-  --zebra: #1e2321;
-  --glass: rgba(255, 255, 255, 0.04);
-  --pine: #4fb393;
-  --pine-hover: #63c4a4;
-  --pine-t: #1e3a31;
-  --on-pine: #0b1d17;
-  --amber: #e3a84c;
-  --amber-t: #3a2f1c;
-  --amber-ink: #f0c47a;
-  --amber-line: #5a4626;
-  --danger: #ec7a66;
-  --danger-hover: #f39482;
-  --danger-t: #3e2421;
-  --danger-line: #5f3530;
-  --on-danger: #1f0d0a;
-  --op-blue: #4c9bf5;
-  --inverse: #e6eae7;
-  --on-inverse: #141816;
-  --scrim: rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.55);
-  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  color-scheme: dark;
+/* "Pine" is the original name of the accent; the tokens are now --accent*. */
+:root,
+[data-palette] {
+  --pine: var(--accent);
+  --pine-hover: var(--accent-hover);
+  --pine-t: var(--accent-t);
+  --on-pine: var(--on-accent);
 }
 
 * {
@@ -135,6 +32,7 @@ body {
   color: var(--granite);
   font: 13px/1.4 var(--sans);
   -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
   user-select: none;
   cursor: default;
 }
@@ -152,6 +50,13 @@ input,
 select {
   font: inherit;
   color: inherit;
+}
+
+/* The body isn't selectable (WebKit needs the prefix); fields still are. */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .mono {
@@ -193,8 +98,12 @@ select {
 .btn.danger {
   color: var(--danger);
 }
-.btn:disabled {
-  opacity: 0.5;
+.btn:disabled,
+.btn.pri:disabled {
+  opacity: 1;
+  background: var(--mist2);
+  border-color: var(--mist);
+  color: var(--faint);
   cursor: not-allowed;
 }
 

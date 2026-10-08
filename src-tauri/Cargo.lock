@@ -2579,6 +2579,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "hex",
+ "libc",
  "notify",
  "plist",
  "rmcp",

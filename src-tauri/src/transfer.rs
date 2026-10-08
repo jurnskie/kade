@@ -16,7 +16,7 @@ use tokio::sync::{watch, Semaphore};
 
 use crate::backup::{self, Recorder};
 use crate::error::{AppError, AppResult};
-use crate::remote::{copy_chunks, Meta, RemoteFs};
+use crate::remote::{copy_chunks, Kept, Meta, RemoteFs};
 use crate::ssh::{join_remote, Session};
 
 const PARALLEL_JOBS: usize = 3;
@@ -51,6 +51,15 @@ pub enum JobState {
     Cancelled,
 }
 
+/// What kind of job a queue entry is. Sync jobs can't be paused.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    #[default]
+    Transfer,
+    Sync,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
     pub id: String,
@@ -69,6 +78,9 @@ pub struct Progress {
     pub error: Option<String>,
     /// Backup transaction holding the files this job overwrote.
     pub backup_id: Option<String>,
+    pub kind: JobKind,
+    /// Something the user should know about a job that still finished.
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -79,23 +91,29 @@ struct Flags {
 
 /// Pause/cancel switches of one job. A watch channel, so a waiter can't miss
 /// a resume that lands between checking the flags and starting to wait.
-struct Ctl {
+pub(crate) struct Ctl {
     flags: watch::Sender<Flags>,
+    pausable: bool,
 }
 
 impl Default for Ctl {
     fn default() -> Self {
-        Ctl { flags: watch::Sender::new(Flags::default()) }
+        Ctl { flags: watch::Sender::new(Flags::default()), pausable: true }
     }
 }
 
 impl Ctl {
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.flags.borrow().cancelled
     }
 
+    /// Finishes once the job is cancelled.
+    pub(crate) async fn until_cancelled(&self) {
+        let _ = self.flags.subscribe().wait_for(|f| f.cancelled).await;
+    }
+
     /// Waits while paused; errors once cancelled.
-    async fn checkpoint(&self) -> AppResult<()> {
+    pub(crate) async fn checkpoint(&self) -> AppResult<()> {
         // Checks the current flags before waiting. The sender lives in `self`,
         // so the channel can't close.
         let mut rx = self.flags.subscribe();
@@ -122,7 +140,7 @@ impl Ctl {
 
 pub struct Transfers {
     jobs: Mutex<HashMap<String, Arc<Ctl>>>,
-    slots: Arc<Semaphore>,
+    pub(crate) slots: Arc<Semaphore>,
 }
 
 impl Default for Transfers {
@@ -136,8 +154,9 @@ impl Transfers {
         self.jobs.lock().unwrap().get(id).cloned()
     }
 
+    /// A job that can't be paused (a sync) ignores this.
     pub fn pause(&self, id: &str, paused: bool) {
-        if let Some(ctl) = self.ctl(id) {
+        if let Some(ctl) = self.ctl(id).filter(|c| c.pausable) {
             ctl.flags.send_if_modified(|f| std::mem::replace(&mut f.paused, paused) != paused);
         }
     }
@@ -147,9 +166,20 @@ impl Transfers {
             ctl.flags.send_modify(|f| f.cancelled = true);
         }
     }
+
+    /// Add a job that can be cancelled (and paused, when `pausable`) by id.
+    pub(crate) fn register(&self, id: &str, pausable: bool) -> Arc<Ctl> {
+        let ctl = Arc::new(Ctl { pausable, ..Ctl::default() });
+        self.jobs.lock().unwrap().insert(id.to_string(), ctl.clone());
+        ctl
+    }
+
+    pub(crate) fn finish(&self, id: &str) {
+        self.jobs.lock().unwrap().remove(id);
+    }
 }
 
-fn basename(path: &str) -> String {
+pub(crate) fn basename(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
@@ -203,7 +233,7 @@ fn scan_local(root: &str, dest_root: &str) -> AppResult<Vec<Item>> {
     Ok(items)
 }
 
-async fn scan_remote(session: &Session, root: &str, dest_root: &Path) -> AppResult<Vec<Item>> {
+async fn scan_remote(session: &Session, ctl: &Ctl, root: &str, dest_root: &Path) -> AppResult<Vec<Item>> {
     let fs = session.fs()?;
     let meta = fs.stat(root).await?.ok_or_else(|| AppError::other(tr!("{root} doesn't exist", "{root} bestaat niet", root = root)))?;
     let mut items = Vec::new();
@@ -220,6 +250,8 @@ async fn scan_remote(session: &Session, root: &str, dest_root: &Path) -> AppResu
     // Walk with listings only: one LIST per folder, which matters a lot on FTP.
     let mut stack = vec![(root.to_string(), dest_root.to_path_buf(), meta.mtime.unwrap_or(0))];
     while let Some((src, dst, mtime)) = stack.pop() {
+        // A big tree takes a while to list; cancelling or pausing shouldn't wait for all of it.
+        ctl.checkpoint().await?;
         items.push(Item { src: src.clone(), dst: dst.to_string_lossy().into(), is_dir: true, size: 0, mtime });
         for entry in fs.list(&src).await? {
             let child_dst = dst.join(&entry.name);
@@ -240,9 +272,9 @@ async fn scan_remote(session: &Session, root: &str, dest_root: &Path) -> AppResu
 /// Receives every progress update (the app forwards them as `transfer` events).
 pub type Emit = Arc<dyn Fn(&Progress) + Send + Sync>;
 
-struct Reporter {
+pub(crate) struct Reporter {
     emit: Emit,
-    progress: Progress,
+    pub(crate) progress: Progress,
     /// Where the job is; `progress.state` shows Paused instead while paused.
     phase: JobState,
     paused: bool,
@@ -252,12 +284,17 @@ struct Reporter {
 }
 
 impl Reporter {
-    fn emit(&mut self) {
+    pub(crate) fn new(emit: Emit, progress: Progress) -> Self {
+        let phase = progress.state;
+        Reporter { emit, progress, phase, paused: false, last_emit: Instant::now(), window_start: Instant::now(), window_bytes: 0 }
+    }
+
+    pub(crate) fn emit(&mut self) {
         self.last_emit = Instant::now();
         (self.emit)(&self.progress);
     }
 
-    fn state(&mut self, state: JobState) {
+    pub(crate) fn state(&mut self, state: JobState) {
         self.phase = state;
         self.show_state();
     }
@@ -277,6 +314,19 @@ impl Reporter {
 
     fn add_bytes(&mut self, n: u64) {
         self.progress.bytes_done += n;
+        self.sample_speed(n);
+    }
+
+    /// Emit, at most every `EMIT_EVERY`.
+    pub(crate) fn tick(&mut self) {
+        if self.last_emit.elapsed() >= EMIT_EVERY {
+            self.emit();
+        }
+    }
+
+    /// Count `n` bytes towards the speed without moving the progress (a sync
+    /// measures the wire, but advances per finished file).
+    pub(crate) fn sample_speed(&mut self, n: u64) {
         self.window_bytes += n;
         let elapsed = self.window_start.elapsed();
         if elapsed >= Duration::from_millis(500) {
@@ -367,7 +417,8 @@ impl Job<'_> {
         Ok(if copy { Decision::Copy { replaces: true } } else { Decision::Skip })
     }
 
-    async fn copy_file(&self, item: &Item) -> AppResult<()> {
+    /// Copy `item` to `dst`: its destination, or what a symlink there points to.
+    async fn copy_file(&self, item: &Item, dst: &str, kept: Option<&Kept>) -> AppResult<()> {
         let fs = self.session.fs()?;
         let progress = |n: usize| {
             self.rep.lock().unwrap().add_bytes(n as u64);
@@ -376,11 +427,14 @@ impl Job<'_> {
         match self.direction {
             Direction::Upload => {
                 let mut src = tokio::fs::File::open(&item.src).await?;
-                let mut dst = fs.writer(&item.dst).await?;
-                copy_chunks(&mut src, &mut dst, progress).await?;
-                dst.finish().await?;
+                let mut out = fs.writer(dst).await?;
+                copy_chunks(&mut src, &mut out, progress).await?;
+                out.finish().await?;
                 // Keep the source's modification time, so "only newer" works both ways.
-                fs.set_mtime(&item.dst, item.mtime).await;
+                fs.set_mtime(dst, item.mtime).await;
+                if let Some(kept) = kept {
+                    fs.restore_kept(dst, kept).await;
+                }
             }
             Direction::Download => {
                 let mut src = fs.reader(&item.src).await?;
@@ -424,6 +478,8 @@ impl Job<'_> {
             Direction::Upload => Some(session),
             Direction::Download => None,
         };
+        let mut dst = item.dst.clone();
+        let mut keep = None;
         let replaces = match self.decide(item, listings).await? {
             Decision::Skip => {
                 let mut rep = rep.lock().unwrap();
@@ -436,26 +492,33 @@ impl Job<'_> {
         if replaces {
             // The listing already says what the destination is; no lock either, so
             // overwrites run as parallel as the copies.
-            let is_dir = listings.entries.get(&item.dst).map(|m| m.is_dir && !m.is_symlink);
-            undo.stash_known(side, &item.dst, is_dir).await?;
+            // A symlink is followed: the file it points to is backed up and rewritten, and keeps its mode.
+            let (target, kept) = match self.direction {
+                Direction::Upload => session.fs()?.overwrite_target(&item.dst).await?,
+                Direction::Download => (item.dst.clone(), None),
+            };
+            dst = target;
+            keep = kept;
+            let is_dir = if dst == item.dst { listings.entries.get(&item.dst).map(|m| m.is_dir && !m.is_symlink) } else { None };
+            undo.stash_known(side, &dst, is_dir).await?;
             rep.lock().unwrap().progress.backup_id = Some(undo.id().to_string());
         }
-        if let Err(e) = self.copy_file(item).await {
+        if let Err(e) = self.copy_file(item, &dst, keep.as_ref()).await {
             // Don't leave a half-written file behind.
             match self.direction {
                 Direction::Upload => {
-                    let _ = session.fs()?.remove_file(&item.dst).await;
+                    let _ = session.fs()?.remove_file(&dst).await;
                 }
                 Direction::Download => {
-                    let _ = std::fs::remove_file(&item.dst);
+                    let _ = std::fs::remove_file(&dst);
                 }
             }
             // And put back the file it was replacing.
             if replaces {
-                match undo.put_back(side, &item.dst).await {
+                match undo.put_back(side, &dst).await {
                     Ok(()) if undo.is_empty() => rep.lock().unwrap().progress.backup_id = None,
                     Ok(()) => {}
-                    Err(err) => eprintln!("kade: restoring {} failed, it stays in the backup: {err}", item.dst),
+                    Err(err) => eprintln!("kade: restoring {dst} failed, it stays in the backup: {err}"),
                 }
             }
             return Err(e);
@@ -468,6 +531,8 @@ impl Job<'_> {
 
     async fn run(&self, source: &str) -> AppResult<()> {
         let (session, direction) = (self.session, self.direction);
+        // A job cancelled or paused while queued must not start scanning.
+        self.ctl.checkpoint().await?;
         let dest = {
             let mut rep = self.rep.lock().unwrap();
             rep.state(JobState::Scanning);
@@ -479,7 +544,7 @@ impl Job<'_> {
                 let (source, dest) = (source.to_string(), dest.clone());
                 tauri::async_runtime::spawn_blocking(move || scan_local(&source, &dest)).await.map_err(AppError::other)??
             }
-            Direction::Download => scan_remote(session, source, Path::new(&dest)).await?,
+            Direction::Download => scan_remote(session, self.ctl, source, Path::new(&dest)).await?,
         };
         {
             let mut rep = self.rep.lock().unwrap();
@@ -533,14 +598,11 @@ pub fn start(emit: Emit, transfers: Arc<Transfers>, session: Arc<Session>, sessi
             Direction::Upload => join_remote(&dest_dir, &name),
             Direction::Download => Path::new(&dest_dir).join(&name).to_string_lossy().into_owned(),
         };
-        let ctl = Arc::new(Ctl::default());
-        transfers.jobs.lock().unwrap().insert(id.clone(), ctl.clone());
+        let ctl = transfers.register(&id, true);
 
-        let mut rep = Reporter {
-            emit: emit.clone(),
-            phase: JobState::Queued,
-            paused: false,
-            progress: Progress {
+        let mut rep = Reporter::new(
+            emit.clone(),
+            Progress {
                 id: id.clone(),
                 session_id: session_id.clone(),
                 name,
@@ -555,11 +617,10 @@ pub fn start(emit: Emit, transfers: Arc<Transfers>, session: Arc<Session>, sessi
                 speed: 0.0,
                 error: None,
                 backup_id: None,
+                kind: JobKind::Transfer,
+                warning: None,
             },
-            last_emit: Instant::now(),
-            window_start: Instant::now(),
-            window_bytes: 0,
-        };
+        );
         rep.emit();
 
         let session = session.clone();
@@ -581,7 +642,7 @@ pub fn start(emit: Emit, transfers: Arc<Transfers>, session: Arc<Session>, sessi
                     rep.state(JobState::Failed);
                 }
             }
-            transfers.jobs.lock().unwrap().remove(&rep.progress.id);
+            transfers.finish(&rep.progress.id);
         });
         ids.push(id);
     }
@@ -652,6 +713,8 @@ mod tests {
                 speed: 0.0,
                 error: None,
                 backup_id: None,
+                kind: JobKind::Transfer,
+                warning: None,
             },
             last_emit: Instant::now(),
             window_start: Instant::now(),
@@ -710,5 +773,19 @@ mod tests {
         assert!(result.is_ok());
         let states = states.lock().unwrap().clone();
         assert!(states.ends_with(&[JobState::Paused, JobState::Running]), "{states:?}");
+    }
+
+    #[test]
+    fn sync_jobs_ignore_pause() {
+        let transfers = Transfers::default();
+        let sync = transfers.register("s", false);
+        let copy = transfers.register("t", true);
+        transfers.pause("s", true);
+        transfers.pause("t", true);
+        assert!(!sync.flags.borrow().paused && copy.flags.borrow().paused);
+        transfers.cancel("s");
+        assert!(sync.cancelled());
+        transfers.finish("s");
+        assert!(transfers.ctl("s").is_none());
     }
 }

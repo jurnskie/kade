@@ -70,6 +70,18 @@ pub struct Workspace {
     /// 1Password account used by this workspace's connections unless they name their own.
     #[serde(default)]
     pub op_account: Option<String>,
+    /// 1Password vault (id) whose SSH keys this workspace's connections may use.
+    #[serde(default)]
+    pub op_vault: Option<String>,
+    /// Default SSH key (`SHA256:…`) for connections that pin no key of their own.
+    #[serde(default)]
+    pub op_key_fingerprint: Option<String>,
+    /// `op://vault/item` of that key, fetched when the agent doesn't offer it.
+    #[serde(default)]
+    pub op_key_item: Option<String>,
+    /// Title of that key, so the UI can name it without listing the vault.
+    #[serde(default)]
+    pub op_key_title: Option<String>,
     #[serde(default)]
     pub updated_at: i64,
 }
@@ -84,7 +96,17 @@ pub const DEFAULT_WORKSPACE: &str = "default";
 
 impl Workspace {
     pub fn fallback() -> Self {
-        Workspace { id: DEFAULT_WORKSPACE.into(), name: tr!("Home", "Thuis"), color: default_color(), op_account: None, updated_at: 0 }
+        Workspace {
+            id: DEFAULT_WORKSPACE.into(),
+            name: tr!("Home", "Thuis"),
+            color: default_color(),
+            op_account: None,
+            op_vault: None,
+            op_key_fingerprint: None,
+            op_key_item: None,
+            op_key_title: None,
+            updated_at: 0,
+        }
     }
 }
 
@@ -492,8 +514,17 @@ mod tests {
 
     #[test]
     fn workspaces_merge_like_servers() {
-        let ws =
-            |name: &str, t: i64| Workspace { id: "w".into(), name: name.into(), color: "pine".into(), op_account: None, updated_at: t };
+        let ws = |name: &str, t: i64| Workspace {
+            id: "w".into(),
+            name: name.into(),
+            color: "pine".into(),
+            op_account: None,
+            op_vault: None,
+            op_key_fingerprint: None,
+            op_key_item: None,
+            op_key_title: None,
+            updated_at: t,
+        };
         let a = Data { workspaces: vec![ws("Werk", 10)], ..Data::default() };
         let b = Data { workspaces: vec![ws("Kantoor", 20)], ..Data::default() };
         assert_eq!(merge(a, b).workspaces[0].name, "Kantoor");

@@ -150,6 +150,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 0 18px 18px;
+    -webkit-user-select: text;
     user-select: text;
   }
   .empty {

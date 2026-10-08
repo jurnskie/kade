@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ArrowUp, ArrowDown, ArrowUpDown, Pause, Play, X, CircleCheck, TriangleAlert, Ban, ChevronDown, ChevronUp, ArchiveRestore, LoaderCircle } from "@lucide/svelte";
+  import { ArrowUp, ArrowDown, ArrowUpDown, Pause, Play, X, CircleCheck, TriangleAlert, Ban, ChevronDown, ChevronUp, ArchiveRestore, LoaderCircle, FolderSync } from "@lucide/svelte";
   import { api, type Progress } from "$lib/api";
   import { formatSize } from "$lib/format";
-  import { transfers, isFinished } from "$lib/transfers.svelte";
+  import { transfers, isFinished, canPause } from "$lib/transfers.svelte";
   import { t } from "$lib/i18n.svelte";
 
   let {
@@ -14,6 +14,7 @@
   let open = $state(true);
   const jobs = $derived(transfers.jobs.filter((j) => j.session_id === sessionId));
   const active = $derived(jobs.filter((j) => !isFinished(j)));
+  const pausable = $derived(active.filter(canPause));
   const totals = $derived({
     files: active.reduce((n, j) => n + j.files_total, 0),
     bytes: active.reduce((n, j) => n + j.bytes_total, 0),
@@ -61,9 +62,9 @@
         {#if active.length}{t("{n} active · {files} files · {size}", { n: active.length, files: totals.files, size: formatSize(totals.bytes) })}{:else}{t("all done")}{/if}
       </span>
       <div class="r">
-        {#if active.length}
-          <button onclick={() => active.forEach((j) => act(api.transferPause(j.id, j.state !== "paused")))}>
-            {active.every((j) => j.state === "paused") ? t("Resume all") : t("Pause all")}
+        {#if pausable.length}
+          <button onclick={() => pausable.forEach((j) => act(api.transferPause(j.id, j.state !== "paused")))}>
+            {pausable.every((j) => j.state === "paused") ? t("Resume all") : t("Pause all")}
           </button>
         {/if}
         {#if jobs.length > active.length}
@@ -83,13 +84,14 @@
               {:else if j.state === "failed"}<TriangleAlert size={16} color="var(--danger)" />
               {:else if j.state === "cancelled"}<Ban size={16} color="var(--lichen)" />
               {:else if j.state === "scanning" || j.state === "queued"}<LoaderCircle size={16} class="spin" color="var(--lichen)" />
+              {:else if j.kind === "sync"}<FolderSync size={16} color="var(--pine)" />
               {:else if j.direction === "upload"}<ArrowUp size={16} color="var(--pine)" />
               {:else}<ArrowDown size={16} color="var(--pine)" />{/if}
             </span>
             <div class="nm">
               <b>{j.name}</b>
-              <small class="mono" title={j.error ?? j.dest}>
-                {#if j.error}{j.error}{:else}{j.direction === "upload" ? "→" : "←"} {j.dest}{/if}
+              <small class="mono" class:warn={!j.error && j.warning} title={j.error ?? j.warning ?? j.dest}>
+                {#if j.error}{j.error}{:else if j.warning}{j.warning}{:else}{j.direction === "upload" ? "→" : "←"} {j.dest}{/if}
               </small>
             </div>
             <div class="track"><i style:width="{pct(j)}%" class:dim={isFinished(j)}></i></div>
@@ -99,12 +101,14 @@
             <div class="st">{stateLabel(j)}</div>
             <div class="acts">
               {#if !isFinished(j)}
-                <button class="ic" title={j.state === "paused" ? t("Resume") : t("Pause")} onclick={() => act(api.transferPause(j.id, j.state !== "paused"))}>
-                  {#if j.state === "paused"}<Play size={15} />{:else}<Pause size={15} />{/if}
-                </button>
+                {#if canPause(j)}
+                  <button class="ic" title={j.state === "paused" ? t("Resume") : t("Pause")} onclick={() => act(api.transferPause(j.id, j.state !== "paused"))}>
+                    {#if j.state === "paused"}<Play size={15} />{:else}<Pause size={15} />{/if}
+                  </button>
+                {/if}
                 <button class="ic" title={t("Cancel")} onclick={() => act(api.transferCancel(j.id))}><X size={15} /></button>
               {:else if j.backup_id}
-                <button class="ic" title={t("Restore overwritten files")} onclick={() => onrestore(j.backup_id!)}>
+                <button class="ic" title={j.kind === "sync" ? t("Restore files replaced or deleted by the sync") : t("Restore overwritten files")} onclick={() => onrestore(j.backup_id!)}>
                   <ArchiveRestore size={15} />
                 </button>
               {/if}
@@ -201,6 +205,9 @@
   }
   .qr.fail .nm small {
     color: var(--danger);
+  }
+  .nm small.warn {
+    color: var(--amber);
   }
   .track {
     height: 5px;

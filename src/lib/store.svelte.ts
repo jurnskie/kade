@@ -42,10 +42,14 @@ class Store {
   );
   groups = $derived([...new Set(this.visibleServers.map((s) => s.group).filter(Boolean))]);
 
+  /** Called with the fresh profiles after every reload, so open tabs don't keep stale ones. */
+  onServersLoaded: ((servers: ServerProfile[]) => void) | null = null;
+
   async reload() {
     this.workspaces = await api.listWorkspaces();
     if (!this.workspaces.some((w) => w.id === this.activeWsId)) this.activeWsId = this.workspaces[0]?.id ?? "";
     this.servers = await api.listServers();
+    this.onServersLoaded?.(this.servers);
     this.settings = await api.getSettings();
   }
 

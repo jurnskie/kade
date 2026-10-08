@@ -25,8 +25,9 @@
     ArrowUpFromLine,
     ArrowDownToLine,
     FilePen,
+    FolderSync,
   } from "@lucide/svelte";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { errorMessage, joinPath, type Entry, type FileOps, type Side, type Transaction } from "$lib/api";
   import { drag } from "$lib/drag.svelte";
@@ -50,6 +51,10 @@
     refreshKey = 0,
     sendLabel = "",
     onsend,
+    syncLabel = "",
+    syncReason = null,
+    onsync,
+    onmenuopen,
     ondeleted,
     onopenfile,
   }: {
@@ -71,6 +76,14 @@
     /** "Upload to …" / "Download to local"; empty hides the action. */
     sendLabel?: string;
     onsend?: (paths: string[]) => void;
+    /** "Sync this folder to server…" / "…from server…"; empty hides the action. */
+    syncLabel?: string;
+    /** Why syncing is unavailable (shown as the tooltip, item disabled); null when it works. */
+    syncReason?: string | null;
+    /** Sync a folder of this pane: the selected one, or the current folder. */
+    onsync?: (folder: string) => void;
+    /** A context menu opened; the owner can use this to check lazily whether sync works. */
+    onmenuopen?: () => void;
     ondeleted?: (tx: Transaction) => void;
     /** Open a file in the user's editor (remote files are synced back on save). */
     onopenfile?: (entry: Entry) => void;
@@ -87,8 +100,20 @@
   // Mutated in place, so a click only re-renders the rows whose state changed.
   const selected = new SvelteSet<string>();
   let anchor = $state<number | null>(null);
+  // The row the arrow keys move from; with Shift the selection spans anchor..cursor.
+  let cursor: number | null = null;
   let history: string[] = [];
   let reloadTick = $state(0);
+  // The folder `entries` belongs to; a reload of the same folder keeps the selection.
+  let loadedPath: string | null = null;
+
+  // Rows have a fixed height (see `td`), so only the visible window is rendered.
+  const ROW = 33;
+  const OVERSCAN = 8;
+  let scrollEl = $state<HTMLDivElement>();
+  let scrollTop = $state(0);
+  let viewH = $state(0);
+  let headH = $state(0);
 
   const visible = $derived.by(() => {
     const byName = collator();
@@ -96,6 +121,10 @@
       .filter((e) => showHidden || !e.name.startsWith("."))
       .toSorted((a, b) => Number(b.is_dir) - Number(a.is_dir) || byName.compare(a.name, b.name));
   });
+
+  const first = $derived(Math.max(0, Math.floor((scrollTop - headH) / ROW) - OVERSCAN));
+  const last = $derived(Math.min(visible.length, Math.ceil((scrollTop + viewH - headH) / ROW) + OVERSCAN));
+  const windowed = $derived(visible.slice(first, last));
 
   const hiddenCount = $derived(showHidden ? 0 : entries.length - visible.length);
 
@@ -120,16 +149,32 @@
     let cancelled = false;
     loading = true;
     error = null;
+    // Don't keep listing (and acting on) the previous folder under the new path.
+    if (p !== loadedPath) {
+      untrack(() => {
+        entries = [];
+        selected.clear();
+        anchor = cursor = null;
+        if (scrollEl) scrollEl.scrollTop = 0;
+      });
+    }
     load(p)
       .then((list) => {
         if (cancelled) return;
+        const samePath = p === loadedPath;
+        loadedPath = p;
         entries = list;
-        selected.clear();
-        if (pendingSelect && list.some((e) => e.path === pendingSelect)) selected.add(pendingSelect);
+        const existing = new Set(list.map((e) => e.path));
+        for (const sel of [...selected]) if (!samePath || !existing.has(sel)) selected.delete(sel);
+        if (pendingSelect && existing.has(pendingSelect)) selected.add(pendingSelect);
         pendingSelect = null;
-        anchor = null;
+        anchor = cursor = null;
       })
-      .catch((e) => !cancelled && (error = errorMessage(e)))
+      .catch((e) => {
+        if (cancelled) return;
+        loadedPath = p;
+        error = errorMessage(e);
+      })
       .finally(() => !cancelled && (loading = false));
     return () => (cancelled = true);
   });
@@ -152,6 +197,7 @@
   }
 
   function click(e: MouseEvent, entry: Entry, index: number) {
+    cursor = index;
     if (e.shiftKey && anchor != null) {
       const [a, b] = [Math.min(anchor, index), Math.max(anchor, index)];
       for (const item of visible.slice(a, b + 1)) selected.add(item.path);
@@ -163,6 +209,31 @@
       selectOnly(entry.path);
       anchor = index;
     }
+  }
+
+  /** Scroll the row at `index` into view, leaving the sticky header uncovered. */
+  function reveal(index: number) {
+    if (!scrollEl) return;
+    const top = index * ROW;
+    if (top < scrollEl.scrollTop) scrollEl.scrollTop = top;
+    else if (headH + top + ROW > scrollEl.scrollTop + viewH) scrollEl.scrollTop = headH + top + ROW - viewH;
+  }
+
+  function moveCursor(e: KeyboardEvent, delta: number) {
+    if (!visible.length) return;
+    const base = cursor ?? anchor ?? (delta > 0 ? -1 : visible.length);
+    const next = Math.min(visible.length - 1, Math.max(0, base + delta));
+    if (e.shiftKey) {
+      anchor ??= Math.min(Math.max(base, 0), visible.length - 1);
+      const [a, b] = [Math.min(anchor, next), Math.max(anchor, next)];
+      selected.clear();
+      for (const item of visible.slice(a, b + 1)) selected.add(item.path);
+    } else {
+      selectOnly(visible[next].path);
+      anchor = next;
+    }
+    cursor = next;
+    reveal(next);
   }
 
   function open(entry: Entry) {
@@ -182,8 +253,9 @@
   let busy = $state(false);
   let pendingSelect: string | null = null;
   let nameInput = $state<HTMLInputElement>();
+  let menuEl = $state<HTMLDivElement>();
 
-  function openMenu(e: MouseEvent, entry: Entry | null, index = -1) {
+  async function openMenu(e: MouseEvent, entry: Entry | null, index = -1) {
     e.preventDefault();
     e.stopPropagation();
     if (entry && !selected.has(entry.path)) {
@@ -191,8 +263,20 @@
       anchor = index;
     }
     if (!entry) selected.clear();
-    // Keep the menu inside the window.
-    menu = { x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 260), entry };
+    const { clientX: x, clientY: y } = e;
+    menu = { x, y, entry };
+    onmenuopen?.();
+    // Keep the menu inside the window: measure it, then shift it left or flip it above the pointer.
+    await tick();
+    if (!menu || !menuEl) return;
+    const { width, height } = menuEl.getBoundingClientRect();
+    const edge = 8;
+    const fitsBelow = y + height + edge <= window.innerHeight;
+    menu = {
+      ...menu,
+      x: Math.max(edge, Math.min(x, window.innerWidth - width - edge)),
+      y: fitsBelow ? y : Math.max(edge, Math.min(y - height, window.innerHeight - height - edge)),
+    };
   }
 
   async function ask(d: Dialog) {
@@ -264,6 +348,8 @@
     else if (e.key === "F2" && sel.length === 1) ask({ kind: "rename", entry: sel[0], value: sel[0].name });
     else if (e.key === "Enter" && sel.length === 1) open(sel[0]);
     else if (e.key === "Backspace") go(parentPath(path));
+    else if (e.key === "ArrowDown") moveCursor(e, 1);
+    else if (e.key === "ArrowUp") moveCursor(e, -1);
     else return;
     e.preventDefault();
   }
@@ -315,7 +401,7 @@
     <nav class="crumb mono">
       {#each crumbs as c, i (c.path)}
         {#if i > 0 && crumbs[i - 1].name !== "/"}<span class="sep">/</span>{/if}
-        <button class:last={i === crumbs.length - 1} onclick={() => go(c.path)}>{c.name}</button>
+        <button class:last={i === crumbs.length - 1} title={c.path} onclick={() => go(c.path)}>{c.name}</button>
       {/each}
     </nav>
     <div class="tools">
@@ -328,17 +414,22 @@
     </div>
   </header>
 
+  <div class="load" class:on={loading}></div>
+
   <div
     class="scroll"
     class:drop={dropHere && drag.over?.dir === path}
     role="presentation"
+    bind:this={scrollEl}
+    bind:clientHeight={viewH}
+    onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
     data-drop-side={side}
     data-drop-session={sessionId}
     data-drop-path={path}
     oncontextmenu={(e) => openMenu(e, null)}
   >
     <table>
-      <thead>
+      <thead bind:clientHeight={headH}>
         <tr>
           <th>{t("Name")}</th>
           <th class="r">{t("Size")}</th>
@@ -347,7 +438,9 @@
         </tr>
       </thead>
       <tbody>
-        {#each visible as entry, i (entry.path)}
+        {#if first > 0}<tr class="sp" style:height="{first * ROW}px"><td colspan="4"></td></tr>{/if}
+        {#each windowed as entry, k (entry.path)}
+          {@const i = first + k}
           {@const EntryIcon = iconFor(entry)}
           <tr
             class:sel={selected.has(entry.path)}
@@ -369,6 +462,7 @@
             {#if showPermissions}<td class="p mono c-perm">{entry.permissions ?? ""}</td>{/if}
           </tr>
         {/each}
+        {#if last < visible.length}<tr class="sp" style:height="{(visible.length - last) * ROW}px"><td colspan="4"></td></tr>{/if}
       </tbody>
     </table>
 
@@ -388,7 +482,7 @@
 
   {#if menu}
     {@const sel = visible.filter((v) => selected.has(v.path))}
-    <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+    <div class="menu" role="menu" bind:this={menuEl} style:left="{menu.x}px" style:top="{menu.y}px">
       {#if menu.entry}
         {#if sendLabel && onsend}
           <button role="menuitem" class="send" onclick={() => ((menu = null), onsend(sel.map((v) => v.path)))}>
@@ -404,6 +498,11 @@
         {/if}
         {#if menu.entry.is_dir && sel.length === 1}
           <button role="menuitem" onclick={() => ((menu = null), open(sel[0]))}><FolderOpen size={15} />{t("Open")}</button>
+        {/if}
+        {#if menu.entry.is_dir && sel.length === 1 && syncLabel && onsync}
+          <button role="menuitem" disabled={syncReason != null} title={syncReason ?? undefined} onclick={() => ((menu = null), onsync(sel[0].path))}>
+            <FolderSync size={15} />{syncLabel}
+          </button>
         {/if}
         {#if sel.length === 1}
           <button role="menuitem" onclick={() => ask({ kind: "rename", entry: sel[0], value: sel[0].name })}>
@@ -424,6 +523,11 @@
       <button role="menuitem" onclick={() => ask({ kind: "new-folder", value: t("new folder") })}>
         <FolderPlus size={15} />{t("New folder")}
       </button>
+      {#if !menu.entry && syncLabel && onsync}
+        <button role="menuitem" disabled={syncReason != null} title={syncReason ?? undefined} onclick={() => ((menu = null), onsync(path))}>
+          <FolderSync size={15} />{syncLabel}
+        </button>
+      {/if}
       <hr />
       <button role="menuitem" onclick={() => ((menu = null), reloadTick++)}><RefreshCw size={15} />{t("Refresh")}</button>
       <button role="menuitem" onclick={() => ((menu = null), (showHidden = !showHidden))}>
@@ -436,16 +540,28 @@
     <Modal width={420} z={41} top="30%" blur={false} pad="18px 20px 16px" gap={10} onclose={() => (dialog = null)}>
       {#if dialog.kind === "delete"}
         <h3>{dialog.paths.length === 1 ? t("Delete?") : t("Delete {n} items?", { n: dialog.paths.length })}</h3>
+        {@const paths = dialog.paths}
+        {@const hasFolder = entries.some((e) => e.is_dir && paths.includes(e.path))}
         <p>
-          {#if dialog.paths.length === 1}<span class="mono">{dialog.paths[0]}</span><br />{/if}
+          {#if paths.length === 1}<span class="mono">{paths[0]}</span><br />{/if}
           {#if side === "local"}
-            {dialog.paths.length === 1
-              ? t("This will be deleted, including folder contents. Kade keeps a backup, so you can restore it from Backups.")
-              : t("All selected items will be deleted, including folder contents. Kade keeps a backup, so you can restore them from Backups.")}
-          {:else}
-            {dialog.paths.length === 1
+            {#if hasFolder}
+              {paths.length === 1
+                ? t("This will be deleted, including folder contents. Kade keeps a backup, so you can restore it from Backups.")
+                : t("All selected items will be deleted, including folder contents. Kade keeps a backup, so you can restore them from Backups.")}
+            {:else}
+              {paths.length === 1
+                ? t("This will be deleted. Kade keeps a backup, so you can restore it from Backups.")
+                : t("All selected items will be deleted. Kade keeps a backup, so you can restore them from Backups.")}
+            {/if}
+          {:else if hasFolder}
+            {paths.length === 1
               ? t("This will be deleted on {server}, including folder contents. Kade keeps a backup, so you can restore it from Backups.", { server: label })
               : t("All selected items will be deleted on {server}, including folder contents. Kade keeps a backup, so you can restore them from Backups.", { server: label })}
+          {:else}
+            {paths.length === 1
+              ? t("This will be deleted on {server}. Kade keeps a backup, so you can restore it from Backups.", { server: label })
+              : t("All selected items will be deleted on {server}. Kade keeps a backup, so you can restore them from Backups.", { server: label })}
           {/if}
         </p>
       {:else}
@@ -462,7 +578,14 @@
       {#if dialog.error}<p class="err">{dialog.error}</p>{/if}
       <div class="da">
         <button class="btn ghost" onclick={() => (dialog = null)}>{t("Cancel")}</button>
-        <button class="btn pri" class:del={dialog.kind === "delete"} disabled={busy} onclick={confirmDialog}>
+        <!-- svelte-ignore a11y_autofocus -->
+        <button
+          class="btn pri"
+          class:del={dialog.kind === "delete"}
+          disabled={busy}
+          autofocus={dialog.kind === "delete"}
+          onclick={confirmDialog}
+        >
           {#if busy}<LoaderCircle size={14} class="spin" />{/if}
           {dialog.kind === "delete" ? t("Delete") : dialog.kind === "rename" ? t("Rename") : t("Create")}
         </button>
@@ -506,8 +629,12 @@
     text-align: left;
     color: var(--granite);
   }
-  .menu button:hover {
+  .menu button:hover:not(:disabled) {
     background: var(--pine-t);
+  }
+  .menu button:disabled {
+    color: var(--faint);
+    cursor: not-allowed;
   }
   .menu button.send {
     color: var(--pine);
@@ -616,19 +743,26 @@
     overflow: hidden;
     white-space: nowrap;
   }
+  /* Earlier segments shrink (to an ellipsis) long before the current folder does. */
   .crumb button {
     padding: 2px 3px;
     border-radius: 4px;
+    flex: 0 10 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .crumb button:hover {
     background: var(--mist2);
     color: var(--granite);
   }
   .crumb button.last {
+    flex-shrink: 1;
     color: var(--granite);
     font-weight: 500;
   }
   .sep {
+    flex: none;
     opacity: 0.6;
   }
   .tools {
@@ -647,6 +781,8 @@
     background: var(--mist2);
   }
   .scroll {
+    -webkit-user-select: none;
+    user-select: none;
     flex: 1;
     overflow: auto;
     min-height: 0;
@@ -670,6 +806,29 @@
   }
   th.r {
     text-align: right;
+  }
+  tr.sp td {
+    height: auto;
+    padding: 0;
+    border: 0;
+  }
+  .load {
+    height: 2px;
+    flex: none;
+    background: linear-gradient(90deg, transparent, var(--pine), transparent) 0 0 / 40% 100% no-repeat;
+    opacity: 0;
+  }
+  .load.on {
+    opacity: 1;
+    animation: load 1s ease-in-out infinite;
+  }
+  @keyframes load {
+    from {
+      background-position-x: -40%;
+    }
+    to {
+      background-position-x: 140%;
+    }
   }
   td {
     padding: 0 14px;

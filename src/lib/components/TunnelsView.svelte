@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { Cable, Plus, Pencil, Trash2, Copy, Check, ArrowRight } from "@lucide/svelte";
+  import { Cable, Plus, Pencil, Trash2, Copy, Check, ArrowRight, TriangleAlert } from "@lucide/svelte";
   import { api, errorMessage, type ServerProfile, type Tunnel, type TunnelState } from "$lib/api";
   import { t, tn } from "$lib/i18n.svelte";
+  import { store } from "$lib/store.svelte";
+  import Prompt from "./Prompt.svelte";
 
   let {
     sessionId,
@@ -32,6 +34,8 @@
   let form = $state<TunnelForm | null>(null);
   let formError = $state<string | null>(null);
   let copied = $state<string | null>(null);
+  /** The tunnel waiting for the user to confirm its deletion. */
+  let deleting = $state<Tunnel | null>(null);
 
   const tunnels = $derived(server.tunnels ?? []);
 
@@ -80,14 +84,23 @@
     };
   }
 
+  /** The profile as stored now; saving from the tab's copy would undo changes synced in meanwhile. */
+  function currentProfile(): ServerProfile {
+    const current = store.servers.find((s) => s.id === server.id);
+    if (!current) throw { kind: "other", message: t("This connection no longer exists, so the tunnels can't be saved.") };
+    return $state.snapshot(current);
+  }
+
   async function saveForm() {
     if (!form) return;
     formError = null;
     const snap = $state.snapshot(form);
     const f: Tunnel = { ...snap, local_port: snap.local_port ?? 0, remote_port: snap.remote_port ?? 0 };
-    const list = f.id ? tunnels.map((x) => (x.id === f.id ? f : x)) : [...tunnels, f];
     try {
-      const saved = await onsave({ ...$state.snapshot(server), tunnels: list });
+      const profile = currentProfile();
+      const existing = profile.tunnels ?? [];
+      const list = f.id ? existing.map((x) => (x.id === f.id ? f : x)) : [...existing, f];
+      const saved = await onsave({ ...profile, tunnels: list });
       if (!saved) return;
       // A running tunnel picks up new ports after a restart.
       if (f.id && running[f.id]) {
@@ -102,10 +115,11 @@
   }
 
   async function remove(tun: Tunnel) {
-    if (!confirm(t("Delete tunnel “{name}”?", { name: label(tun) }))) return;
+    deleting = null;
     try {
+      const profile = currentProfile();
       if (running[tun.id]) await api.tunnelStop(sessionId, tun.id);
-      await onsave({ ...$state.snapshot(server), tunnels: tunnels.filter((x) => x.id !== tun.id) });
+      await onsave({ ...profile, tunnels: (profile.tunnels ?? []).filter((x) => x.id !== tun.id) });
       await refresh();
     } catch (e) {
       onerror(e);
@@ -170,7 +184,7 @@
             {#if copied === tun.id}<Check size={14} color="var(--pine)" />{:else}<Copy size={14} />{/if}
           </button>
           <button class="ib" title={t("Edit")} onclick={() => ((formError = null), (form = { ...tun }))}><Pencil size={14} /></button>
-          <button class="ib" title={t("Delete")} onclick={() => remove(tun)}><Trash2 size={14} /></button>
+          <button class="ib" title={t("Delete")} onclick={() => (deleting = tun)}><Trash2 size={14} /></button>
         </div>
       {/each}
     </div>
@@ -220,7 +234,24 @@
   {/if}
 </section>
 
+{#if deleting}
+  {@const tun = deleting}
+  <Prompt icon={TriangleAlert} color="var(--danger)" title={t("Delete tunnel “{name}”?", { name: label(tun) })} onclose={() => (deleting = null)}>
+    {#snippet message()}
+      {t("The tunnel is removed from this connection.")}
+    {/snippet}
+    {#snippet actions()}
+      <button class="btn ghost" onclick={() => (deleting = null)}>{t("Cancel")}</button>
+      <button class="btn pri del" onclick={() => remove(tun)}>{t("Delete")}</button>
+    {/snippet}
+  </Prompt>
+{/if}
+
 <style>
+  .btn.del {
+    background: var(--danger);
+    border-color: var(--danger);
+  }
   .tunnels {
     flex: 1;
     overflow-y: auto;

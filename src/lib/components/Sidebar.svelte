@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modKey } from "$lib/keys";
   import {
     Anchor,
     Search,
@@ -42,7 +43,7 @@
     servers: ServerProfile[];
     connected: Set<string>;
     activeId: string | null;
-    connecting: string | null;
+    connecting: ReadonlySet<string>;
     /** Ids of recently opened connections on this machine, newest first. */
     recent: string[];
     onopen: (s: ServerProfile) => void;
@@ -117,7 +118,11 @@
     role="button"
     tabindex="0"
     onclick={() => onopen(s)}
-    onkeydown={(e) => e.key === "Enter" && onopen(s)}
+    onkeydown={(e) => {
+      // Keys on the nested edit button belong to that button.
+      if (e.target !== e.currentTarget) return;
+      if (e.key === "Enter" || e.key === " ") (e.preventDefault(), onopen(s));
+    }}
   >
     <span class="ic">
       {#if s.protocol === "ssh"}
@@ -133,7 +138,7 @@
     <button class="edit" title={t("Edit")} onclick={(e) => (e.stopPropagation(), onedit(s))}>
       <Pencil size={12} color="var(--lichen)" />
     </button>
-    <span class="dot" class:off={!connected.has(s.id)} class:busy={connecting === s.id}></span>
+    <span class="dot" class:off={!connected.has(s.id)} class:busy={connecting.has(s.id)}></span>
   </div>
 {/snippet}
 
@@ -156,6 +161,7 @@
     <button
       class="ws"
       style:--ws={wsColor.color}
+      style:--on-ws={wsColor.onColor}
       style:--ws-tint={wsColor.tint}
       title={collapsed ? t("Workspace: {name}", { name: activeWorkspace?.name ?? "" }) : t("Switch workspace")}
       onclick={(e) => (e.stopPropagation(), (wsMenu = !wsMenu))}
@@ -170,10 +176,10 @@
           {@const c = colorOf(w)}
           <div class="ws-item" class:on={w.id === activeWorkspace?.id}>
             <button class="ws-pick" role="menuitem" onclick={() => ((wsMenu = false), onswitch(w.id))}>
-              <span class="ws-dot small" style:--ws={c.color}>{w.name.slice(0, 1).toUpperCase()}</span>
+              <span class="ws-dot small" style:--ws={c.color} style:--on-ws={c.onColor}>{w.name.slice(0, 1).toUpperCase()}</span>
               <span class="ws-label">{w.name}</span>
               <span class="ws-count">{counts[w.id] ?? 0}</span>
-              {#if i < 9}<kbd>Ctrl {i + 1}</kbd>{/if}
+              {#if i < 9}<kbd>{modKey} {i + 1}</kbd>{/if}
               {#if w.id === activeWorkspace?.id}<Check size={14} color="var(--pine)" />{/if}
             </button>
             <button class="ws-edit" title={t("Edit")} onclick={() => ((wsMenu = false), onmanage(w))}>
@@ -187,14 +193,14 @@
   </div>
 
   {#if collapsed}
-    <button class="search-ico" title={t("Search (Ctrl K)")} onclick={onsearch}>
+    <button class="search-ico" title={t("Search ({key})", { key: `${modKey} K` })} onclick={onsearch}>
       <Search size={16} color="var(--ink2)" />
     </button>
   {:else}
     <button class="search" onclick={onsearch}>
       <Search size={15} color="var(--lichen)" />
       <span>{t("Search or open…")}</span>
-      <kbd>Ctrl K</kbd>
+      <kbd>{modKey} K</kbd>
     </button>
   {/if}
 
@@ -292,7 +298,7 @@
     height: 22px;
     border-radius: 6px;
     background: var(--ws);
-    color: #fff;
+    color: var(--on-ws);
     font-weight: 700;
     font-size: 11.5px;
     display: grid;
@@ -524,7 +530,7 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--pine);
+    background: var(--online);
     flex: none;
   }
   .dot.small {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { isTopModal, pushModal } from "$lib/modals";
   import { Search, Server, SquareTerminal, FolderUp, Plus, CornerDownLeft } from "@lucide/svelte";
   import type { ServerProfile, Workspace } from "$lib/api";
   import { colorOf, workspaceIdOf } from "$lib/workspaces";
@@ -32,7 +33,13 @@
   let input = $state<HTMLInputElement>();
   let listEl = $state<HTMLDivElement>();
 
-  onMount(() => input?.focus());
+  let modal: ReturnType<typeof pushModal> | undefined;
+
+  onMount(() => {
+    modal = pushModal();
+    input?.focus();
+    return modal.pop;
+  });
 
   /** Every word must appear somewhere; names that start with the query rank first. */
   const results = $derived.by(() => {
@@ -44,8 +51,9 @@
     return servers
       .filter((s) => {
         const ws = workspaces.find((w) => w.id === workspaceIdOf(s))?.name ?? "";
-        const hay = `${s.name} ${s.host} ${s.user} ${s.group} ${ws} ${s.protocol} ${s.remote_path ?? ""}`.toLowerCase();
-        return words.every((w) => hay.includes(w));
+        const hay = `${s.name} ${s.host} ${s.user} ${s.group} ${ws} ${s.remote_path ?? ""}`.toLowerCase();
+        // The protocol only counts on an exact match, so "sh" doesn't pull in every ssh server.
+        return words.every((w) => hay.includes(w) || w === s.protocol);
       })
       .sort((a, b) => {
         const q = words[0] ?? "";
@@ -56,11 +64,6 @@
         return pa - pb || wa - wb || rank(a) - rank(b) || a.name.localeCompare(b.name, locale());
       })
       .slice(0, 50);
-  });
-
-  $effect(() => {
-    void query;
-    index = 0;
   });
 
   async function move(delta: number) {
@@ -80,9 +83,14 @@
     if (e.key === "ArrowDown") (e.preventDefault(), move(1));
     else if (e.key === "ArrowUp") (e.preventDefault(), move(-1));
     else if (e.key === "Enter") (e.preventDefault(), results.length ? choose(results[index]) : (onclose(), onnew()));
-    else if (e.key === "Escape") (e.preventDefault(), onclose());
+  }
+
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && modal && isTopModal(modal.id)) (e.preventDefault(), onclose());
   }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="scrim" role="presentation" onclick={onclose}></div>
 <div class="qs" role="dialog" aria-modal="true" aria-label={t("Quick open")}>
@@ -91,11 +99,13 @@
     <input
       bind:this={input}
       bind:value={query}
+      aria-label={t("Find a connection")}
       placeholder={t("Name, host, group or folder…")}
       spellcheck="false"
+      oninput={() => (index = 0)}
       onkeydown={onKey}
     />
-    <kbd>Esc</kbd>
+    <kbd aria-hidden="true">Esc</kbd>
   </label>
   <div class="list" bind:this={listEl}>
     {#each results as s, i (s.id)}
