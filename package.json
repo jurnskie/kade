@@ -1,6 +1,6 @@
 {
   "name": "kade",
-  "version": "0.6.6",
+  "version": "0.7.0",
   "description": "A friendly SSH, SFTP and FTP manager for Linux and macOS",
   "type": "module",
   "scripts": {
