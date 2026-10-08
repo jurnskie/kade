@@ -20,8 +20,9 @@ A friendly SSH, SFTP and FTP manager for Linux and macOS, in the spirit of Trans
   CLI) or a password you type (never stored). Host keys are checked against `~/.ssh/known_hosts`.
 - **Sync folder** over rsync: right-click a folder and choose Sync to or from the server. Kade previews every
   change first, can delete extra files at the destination, and puts everything it overwrites or deletes in
-  Backups. It runs over Kade's own SSH connection, so 1Password and agent sign-in keep working. Needs rsync on
-  both ends.
+  Backups. Inside a Laravel project, shortcuts fill in content, public/assets or storage/app on both sides, with
+  Deployer's symlinks resolved to the real folder. It runs over Kade's own SSH connection, so 1Password and agent
+  sign-in keep working. Needs rsync on both ends.
 - **Sync** connections and settings between computers through a folder your sync client keeps in step
   (Syncthing, iCloud Drive, Synology Drive, …). Passwords are never written to it.
 - **MCP server** inside the app (Settings → AI assistants), so an assistant such as Claude Code can add, change,
