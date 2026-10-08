@@ -241,6 +241,14 @@ impl RemoteFs {
         }
     }
 
+    /// The real path with every symlink resolved (SFTP `realpath`). FTP has no such call, so the path stays as is.
+    pub async fn canonicalize(&self, path: &str) -> AppResult<String> {
+        match self {
+            RemoteFs::Ftp(_) => Ok(path.to_string()),
+            RemoteFs::Sftp(sftp) => Ok(sftp.canonicalize(path).await?),
+        }
+    }
+
     pub async fn exists(&self, path: &str) -> AppResult<bool> {
         Ok(self.stat(path).await?.is_some())
     }

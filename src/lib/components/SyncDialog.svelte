@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { ArrowRight, FolderSync, FolderUp, FolderDown, LoaderCircle, TriangleAlert, Search, Plus, RefreshCw, Minus, FileMinus, CircleSlash } from "@lucide/svelte";
-  import { api, errorMessage, type SyncChange, type SyncDirection, type SyncPreview, type SyncPreviewItem } from "$lib/api";
+  import { api, errorMessage, type LocalLaravel, type SyncChange, type SyncDirection, type SyncPreview, type SyncPreviewItem } from "$lib/api";
   import { t, tn } from "$lib/i18n.svelte";
   import { formatSize } from "$lib/format";
   import Modal from "./Modal.svelte";
@@ -130,7 +130,103 @@
 
   onMount(() => {
     if (initialDirection === "from_server") void checkRemoteSource();
+    // Only a Laravel project gets shortcuts; anywhere else this stays quiet.
+    api.localLaravel(initialLocal.trim()).then((p) => (project = p)).catch(() => {});
   });
+
+  /** Folders of a Laravel project, relative to its root. */
+  const SHORTCUTS = [
+    { id: "content", rel: "content", label: () => t("Content") },
+    { id: "assets", rel: "public/assets", label: () => t("Assets") },
+    { id: "storage", rel: "storage/app", label: () => "storage/app" },
+  ] as const;
+  type Shortcut = (typeof SHORTCUTS)[number];
+
+  let project = $state<LocalLaravel | null>(null);
+  let shortcutBusy = $state(false);
+  let activeShortcut = $state<string | null>(null);
+  let shortcutNotes = $state<string[]>([]);
+  let symlinkWhy = $state(false);
+  // storage/app is only worth offering when it is there; the others show why they're disabled.
+  const shortcuts = $derived(project ? SHORTCUTS.filter((s) => s.id !== "storage" || project!.storage) : []);
+
+  const joinPath = (root: string, rel: string) => `${root.replace(/\/+$/, "")}/${rel}`;
+
+  /** "current/public/assets → shared/public/assets": the shared leading folders are left out. */
+  function changed(from: string, to: string) {
+    const a = from.split("/");
+    const b = to.split("/");
+    let i = 0;
+    while (i < a.length - 1 && i < b.length - 1 && a[i] === b[i]) i++;
+    return `${a.slice(i).join("/")} → ${b.slice(i).join("/")}`;
+  }
+
+  /**
+   * Fills both folders for a project folder. Symlinks are resolved first, because
+   * rsync 3.4+ refuses to write into a symlinked destination (Deployer's
+   * `current/public/assets` is one).
+   */
+  async function applyShortcut(s: Shortcut) {
+    if (!project || shortcutBusy || running) return;
+    shortcutBusy = true;
+    const notes: string[] = [];
+    try {
+      const localWanted = joinPath(project.root, s.rel);
+      const typedRemote = remote.trim();
+      const found = await api.remoteLaravelRoot(sessionId, typedRemote);
+      let remoteWanted = joinPath(found ?? typedRemote, s.rel);
+      let remoteMissing = false;
+      if (!found) {
+        // No project on the server: the folder may still be there, otherwise its nearest existing parent.
+        let at = remoteWanted;
+        for (;;) {
+          try {
+            await api.remoteList(sessionId, at);
+            break;
+          } catch {
+            if (at === "/") break;
+            at = parentOf(at);
+          }
+        }
+        if (at === remoteWanted) {
+          notes.push(t("No Laravel project found on the server, so {path} is used. Check that it's the right folder.", { path: at }));
+        } else {
+          notes.push(t("No Laravel project found on the server, and {path} doesn't exist there. Its nearest existing folder, {parent}, is filled in.", { path: remoteWanted, parent: at }));
+          remoteWanted = at;
+        }
+      }
+      const localReal = await api.localRealpath(localWanted);
+      let remoteReal = remoteWanted;
+      try {
+        remoteReal = await api.remoteRealpath(sessionId, remoteWanted);
+      } catch {
+        remoteMissing = true;
+      }
+      if (localReal !== localWanted) notes.push(t("Symlink resolved on this computer: {change}", { change: changed(localWanted, localReal) }));
+      if (remoteReal !== remoteWanted) notes.push(t("Symlink resolved on the server: {change}", { change: changed(remoteWanted, remoteReal) }));
+      const resolved = localReal !== localWanted || remoteReal !== remoteWanted;
+      dirty();
+      local = localReal;
+      remote = remoteReal;
+      activeShortcut = s.id;
+      shortcutNotes = notes;
+      symlinkWhy = resolved;
+      // A folder that isn't on the server yet only matters when it is the source.
+      if (remoteMissing && direction === "from_server") void checkRemoteSource();
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      shortcutBusy = false;
+    }
+  }
+
+  /** Typing in a folder field means the shortcut no longer describes it. */
+  function pathEdited() {
+    activeShortcut = null;
+    shortcutNotes = [];
+    symlinkWhy = false;
+    dirty();
+  }
 
   /** Both folders must be absolute paths; the server reports the rest (missing, not a folder). */
   function pathProblem(): string | null {
@@ -254,13 +350,33 @@
       </button>
     </div>
 
+    {#if project}
+      <div class="shortcuts" role="group" aria-label={t("Laravel folders")}>
+        <span class="lbl">{t("Laravel folders")}</span>
+        {#each shortcuts as s (s.id)}
+          {@const exists = s.id === "content" ? project.content : s.id === "assets" ? project.assets : project.storage}
+          <button
+            class="chip"
+            class:on={activeShortcut === s.id}
+            aria-pressed={activeShortcut === s.id}
+            disabled={!exists || running || shortcutBusy}
+            title={exists ? t("Use {path} on both sides", { path: s.rel }) : t("{path} doesn't exist in this project on this computer", { path: s.rel })}
+            onclick={() => applyShortcut(s)}
+          >
+            {s.label()}
+          </button>
+        {/each}
+        {#if shortcutBusy}<LoaderCircle size={14} class="spin" color="var(--lichen)" />{/if}
+      </div>
+    {/if}
+
     <div class="paths">
       <label class="side">
         <span class="lbl">{t("From")}</span>
         {#if toServer}
-          <input class="mono" bind:value={local} oninput={dirty} spellcheck="false" disabled={running} />
+          <input class="mono" bind:value={local} oninput={pathEdited} spellcheck="false" disabled={running} />
         {:else}
-          <input class="mono" bind:value={remote} oninput={dirty} spellcheck="false" disabled={running} />
+          <input class="mono" bind:value={remote} oninput={pathEdited} spellcheck="false" disabled={running} />
         {/if}
         <small>{toServer ? t("This computer") : serverName}</small>
       </label>
@@ -268,13 +384,22 @@
       <label class="side">
         <span class="lbl">{t("To")}</span>
         {#if toServer}
-          <input class="mono" bind:value={remote} oninput={dirty} spellcheck="false" disabled={running} />
+          <input class="mono" bind:value={remote} oninput={pathEdited} spellcheck="false" disabled={running} />
         {:else}
-          <input class="mono" bind:value={local} oninput={dirty} spellcheck="false" disabled={running} />
+          <input class="mono" bind:value={local} oninput={pathEdited} spellcheck="false" disabled={running} />
         {/if}
         <small>{toServer ? serverName : t("This computer")}</small>
       </label>
     </div>
+
+    {#if shortcutNotes.length || symlinkWhy}
+      <div class="notes">
+        {#each shortcutNotes as n, i (i)}
+          <p class="note"><TriangleAlert size={14} />{n}</p>
+        {/each}
+        {#if symlinkWhy}<p class="note quiet">{t("rsync can't write into a symlinked folder, so the real folder is used.")}</p>{/if}
+      </div>
+    {/if}
 
     {#if sourceNote}
       <p class="note"><TriangleAlert size={14} />{sourceNote}</p>
@@ -474,6 +599,20 @@
     color: var(--lichen);
     font-size: 11.5px;
   }
+  .shortcuts {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .shortcuts .lbl {
+    margin-right: 4px;
+  }
+  .notes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
   .arrow {
     height: 34px;
     margin-top: 16px;
@@ -593,7 +732,11 @@
     margin-left: 3px;
     color: var(--granite);
   }
-  .chip:hover {
+  .chip:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .chip:hover:not(:disabled) {
     background: var(--mist2);
   }
   .chip.on {

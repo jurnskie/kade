@@ -10,6 +10,7 @@ mod fs;
 mod ftp;
 mod hostenv;
 mod importer;
+mod laravel;
 mod mcp;
 mod onepassword;
 mod profiles;
@@ -211,6 +212,32 @@ fn tunnels_list(tunnels: State<'_, tunnel::Tunnels>, session_id: String) -> Vec<
 async fn remote_list(sessions: State<'_, Sessions>, session_id: String, path: String) -> AppResult<Vec<fs::Entry>> {
     let session = sessions.get(&session_id)?;
     ssh::list(&session, &path).await
+}
+
+/// Laravel project around a local folder, and which shortcut folders it has.
+#[tauri::command]
+fn local_laravel(path: String) -> Option<laravel::LocalProject> {
+    laravel::local_project(&path)
+}
+
+/// Nearest folder at or above `path` on the server that holds an `artisan` file.
+#[tauri::command]
+async fn remote_laravel_root(sessions: State<'_, Sessions>, session_id: String, path: String) -> AppResult<Option<String>> {
+    let session = sessions.get(&session_id)?;
+    laravel::remote_root(session.fs()?, &path).await
+}
+
+/// The real folder behind a local path, symlinks resolved.
+#[tauri::command]
+fn local_realpath(path: String) -> AppResult<String> {
+    laravel::local_realpath(&path)
+}
+
+/// The real folder behind a server path, symlinks resolved.
+#[tauri::command]
+async fn remote_realpath(sessions: State<'_, Sessions>, session_id: String, path: String) -> AppResult<String> {
+    let session = sessions.get(&session_id)?;
+    session.fs()?.canonicalize(&path).await
 }
 
 #[tauri::command]
@@ -664,6 +691,10 @@ pub fn run() {
             connect,
             disconnect,
             remote_list,
+            local_laravel,
+            remote_laravel_root,
+            local_realpath,
+            remote_realpath,
             server_status,
             tunnel_start,
             tunnel_stop,

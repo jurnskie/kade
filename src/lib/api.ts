@@ -185,6 +185,13 @@ export interface RsyncSupport {
   pull_warning: string | null;
 }
 
+export interface LocalLaravel {
+  root: string;
+  content: boolean;
+  assets: boolean;
+  storage: boolean;
+}
+
 export interface SyncRequest {
   direction: SyncDirection;
   /** Absolute local folder (source for to_server, destination for from_server). */
@@ -430,6 +437,13 @@ export const api = {
   disconnect: (sessionId: string) => invoke<void>("disconnect", { sessionId }),
   remoteList: (sessionId: string, path: string) =>
     invoke<Entry[]>("remote_list", { sessionId, path }),
+  /** The Laravel project (a folder with `artisan`) around a local folder, if any. */
+  localLaravel: (path: string) => invoke<LocalLaravel | null>("local_laravel", { path }),
+  remoteLaravelRoot: (sessionId: string, path: string) =>
+    invoke<string | null>("remote_laravel_root", { sessionId, path }),
+  /** The real folder behind a path, with symlinks resolved. */
+  localRealpath: (path: string) => invoke<string>("local_realpath", { path }),
+  remoteRealpath: (sessionId: string, path: string) => invoke<string>("remote_realpath", { sessionId, path }),
   terminalOpen: (sessionId: string, cols: number, rows: number, onEvent: (e: TermEvent) => void) => {
     const events = new Channel<TermEvent>();
     events.onmessage = onEvent;
